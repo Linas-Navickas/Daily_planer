@@ -1,8 +1,33 @@
 $ErrorActionPreference = "Stop"
 $serverProcess = $null
 $password = $null
-Write-Host "Slaptažodžio simboliai nebus rodomi. Įveskite jį ir paspauskite Enter."
-$securePassword = Read-Host "Sugalvokite planuoklio slaptažodį" -AsSecureString
+
+function Read-MaskedPassword {
+    param([string]$Prompt)
+    Write-Host -NoNewline $Prompt
+    $value = New-Object System.Security.SecureString
+    while ($true) {
+        $key = [Console]::ReadKey($true)
+        if ($key.Key -eq [ConsoleKey]::Enter) {
+            [Console]::WriteLine()
+            $value.MakeReadOnly()
+            return $value
+        }
+        if ($key.Key -eq [ConsoleKey]::Backspace) {
+            if ($value.Length -gt 0) {
+                $value.RemoveAt($value.Length - 1)
+                [Console]::Write("`b `b")
+            }
+            continue
+        }
+        if (-not [char]::IsControl($key.KeyChar)) {
+            $value.AppendChar($key.KeyChar)
+            [Console]::Write("•")
+        }
+    }
+}
+
+$securePassword = Read-MaskedPassword "Sugalvokite planuoklio slaptažodį (bent 12 simbolių): "
 $passwordPtr = [Runtime.InteropServices.Marshal]::SecureStringToBSTR($securePassword)
 
 try {
