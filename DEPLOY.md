@@ -2,6 +2,12 @@
 
 Planuoklis dabar turi serverinį API ir SQLite duomenų bazę, todėl prisijungus iš telefono ar kompiuterio matomos tos pačios užduotys. Serveris naudoja `0.0.0.0` ir prieglobos platformos `PORT` reikšmę.
 
+## Laikinas viešas URL iš savo kompiuterio
+
+Windows kompiuteryje paleiskite `start_public.ps1`. Įveskite bent 12 simbolių planuoklio slaptažodį. Scenarijus paleis serverį ir sukurs HTTPS tunelį per `localhost.run`; terminale bus parodytas išorinis URL. Atidarykite jį telefone ar kitame įrenginyje.
+
+Kompiuteris, šis scenarijus ir interneto ryšys turi veikti visą laiką, kai norite pasiekti planuoklį. Nemokamo tunelio adresas laikinas ir gali pasikeisti jį paleidus iš naujo. Planuoklio duomenų bazė lieka kompiuterio `data/` aplanke. Viešas URL yra pasiekiamas kitiems, todėl perduokite jį tik norimiems žmonėms ir naudokite stiprų prisijungimo slaptažodį.
+
 ## Render
 
 1. Įkelkite projekto failus į savo GitHub, GitLab arba Bitbucket saugyklą. Saugokite ją privačią.

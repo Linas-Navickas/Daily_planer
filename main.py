@@ -141,7 +141,9 @@ class PlannerHandler(SimpleHTTPRequestHandler):
             LOGIN_ATTEMPTS.pop(client, None)
             session = secrets.token_urlsafe(32)
             SESSIONS.add(session)
-            secure = "; Secure" if self.headers.get("X-Forwarded-Proto") == "https" else ""
+            forwarded_proto = self.headers.get("X-Forwarded-Proto", self.headers.get("X_Forwarded_Proto", ""))
+            forwarded = self.headers.get("Forwarded", "").lower()
+            secure = "; Secure" if forwarded_proto.lower() == "https" or "proto=https" in forwarded else ""
             return self.send_json(200, {"authenticated": True}, {
                 "Set-Cookie": f"planner_session={session}; HttpOnly; SameSite=Strict; Path=/; Max-Age=2592000{secure}"
             })
