@@ -1,4 +1,4 @@
-$ErrorActionPreference = "Stop"
+﻿$ErrorActionPreference = "Stop"
 $serverProcess = $null
 $tunnelProcess = $null
 $password = $null
@@ -92,14 +92,26 @@ try {
 
     if ($publicUrl) {
         Write-Host "Viešas planuoklio adresas: $publicUrl"
-        & python -c "import qrcode,sys; qrcode.make(sys.argv[1]).save(sys.argv[2])" $publicUrl $qrPath
+        $qrGeneratorPath = Join-Path $PSScriptRoot "generate_qr.py"
+        & python $qrGeneratorPath $publicUrl $qrPath
         if ($LASTEXITCODE -eq 0) {
             Write-Host "QR kodas atnaujintas: $qrPath"
         }
         else {
-            Write-Warning "QR kodo sukurti nepavyko. Įdiekite modulį: python -m pip install 'qrcode[pil]'"
+            throw "QR kodo sukurti nepavyko. Įdiekite modulį su: python -m pip install -r requirements.txt"
         }
+        if (-not (Test-Path $qrPath)) {
+            throw "QR kodo failas nesukurtas: $qrPath"
+        }
+        Start-Process -FilePath $qrPath
+        Write-Host "QR kodas atidarytas vaizdų peržiūros programoje."
         Write-Host "Tunelis veiks tol, kol šis langas bus atidarytas. Sustabdykite su Ctrl+C."
+    }
+    else {
+        Write-Host "Cloudflare tunelis sustojo nesuteikęs viešo URL."
+        foreach ($logPath in @($tunnelStdout, $tunnelStderr)) {
+            if (Test-Path $logPath) { Get-Content $logPath }
+        }
     }
 
     while (-not $tunnelProcess.HasExited) {

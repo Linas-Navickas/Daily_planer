@@ -4,7 +4,7 @@ Planuoklis dabar turi serverinį API ir SQLite duomenų bazę, todėl prisijungu
 
 ## Laikinas viešas URL iš savo kompiuterio
 
-Windows kompiuteryje įdiekite `cloudflared` (arba laikykite `cloudflared.exe` aplanke `.tools/`), tada paleiskite `start_public.ps1`. Įveskite bent 12 simbolių planuoklio slaptažodį. Scenarijus paleis serverį ir Cloudflare Quick Tunnel; terminale bus parodytas laikinas `trycloudflare.com` HTTPS URL. Gavęs naują adresą scenarijus atnaujins `planner-qr.png` tame pačiame aplanke. QR generavimui reikia Python modulio `qrcode` (`python -m pip install "qrcode[pil]"`).
+Windows kompiuteryje įdiekite `cloudflared` (arba laikykite `cloudflared.exe` aplanke `.tools/`), tada paleiskite `start_public.ps1`. Įveskite bent 12 simbolių planuoklio slaptažodį. Scenarijus paleis serverį ir Cloudflare Quick Tunnel; terminale bus parodytas laikinas `trycloudflare.com` HTTPS URL. Gavęs naują adresą scenarijus atnaujins `planner-qr.png` tame pačiame aplanke. QR generavimui įdiekite projekto priklausomybes komanda `python -m pip install -r requirements.txt`.
 
 Kompiuteris, šis scenarijus ir interneto ryšys turi veikti visą laiką, kai norite pasiekti planuoklį. Quick Tunnel nereikalauja Cloudflare paskyros, tačiau jo adresas laikinas ir gali pasikeisti jį paleidus iš naujo. Planuoklio duomenų bazė lieka kompiuterio `data/` aplanke. Viešas URL yra pasiekiamas kitiems, todėl perduokite jį tik norimiems žmonėms ir naudokite stiprų prisijungimo slaptažodį.
 
