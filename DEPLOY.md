@@ -4,9 +4,9 @@ Planuoklis dabar turi serverinį API ir SQLite duomenų bazę, todėl prisijungu
 
 ## Laikinas viešas URL iš savo kompiuterio
 
-Windows kompiuteryje paleiskite `start_public.ps1`. Įveskite bent 12 simbolių planuoklio slaptažodį. Scenarijus paleis serverį ir sukurs HTTPS tunelį per `localhost.run`; terminale bus parodytas išorinis URL. Atidarykite jį telefone ar kitame įrenginyje.
+Windows kompiuteryje įdiekite `cloudflared` (arba laikykite `cloudflared.exe` aplanke `.tools/`), tada paleiskite `start_public.ps1`. Įveskite bent 12 simbolių planuoklio slaptažodį. Scenarijus paleis serverį ir Cloudflare Quick Tunnel; terminale bus parodytas laikinas `trycloudflare.com` HTTPS URL. Atidarykite jį telefone ar kitame įrenginyje.
 
-Kompiuteris, šis scenarijus ir interneto ryšys turi veikti visą laiką, kai norite pasiekti planuoklį. Nemokamo tunelio adresas laikinas ir gali pasikeisti jį paleidus iš naujo. Planuoklio duomenų bazė lieka kompiuterio `data/` aplanke. Viešas URL yra pasiekiamas kitiems, todėl perduokite jį tik norimiems žmonėms ir naudokite stiprų prisijungimo slaptažodį.
+Kompiuteris, šis scenarijus ir interneto ryšys turi veikti visą laiką, kai norite pasiekti planuoklį. Quick Tunnel nereikalauja Cloudflare paskyros, tačiau jo adresas laikinas ir gali pasikeisti jį paleidus iš naujo. Planuoklio duomenų bazė lieka kompiuterio `data/` aplanke. Viešas URL yra pasiekiamas kitiems, todėl perduokite jį tik norimiems žmonėms ir naudokite stiprų prisijungimo slaptažodį.
 
 ## Render
 

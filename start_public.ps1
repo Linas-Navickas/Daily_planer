@@ -50,15 +50,20 @@ try {
         throw "Planuoklio serveris nepasileido. Patikrinkite, ar įdiegtas Python."
     }
 
-    Write-Host "Planuoklis paleistas. SSH tunelio išorinis adresas bus parodytas žemiau."
-    Write-Host "Pirmą kartą prisijungiant SSH gali paprašyti patvirtinti localhost.run serverio raktą."
+    $cloudflaredPath = Join-Path $PSScriptRoot ".tools\cloudflared.exe"
+    if (-not (Test-Path $cloudflaredPath)) {
+        $cloudflaredCommand = Get-Command cloudflared -ErrorAction SilentlyContinue
+        if (-not $cloudflaredCommand) {
+            throw "Nerasta cloudflared. Paleiskite cloudflared.exe diegimo instrukciją arba įdiekite jį į PATH."
+        }
+        $cloudflaredPath = $cloudflaredCommand.Source
+    }
+
+    Write-Host "Planuoklis paleistas. Cloudflare Quick Tunnel parodys laikiną HTTPS URL."
     Write-Host "Tunelio langą uždarykite su Ctrl+C."
-    & ssh -o ExitOnForwardFailure=yes `
-        -o ServerAliveInterval=60 `
-        -o ServerAliveCountMax=3 `
-        -R 80:localhost:8000 nokey@localhost.run
+    & $cloudflaredPath tunnel --url http://localhost:8000
     if ($LASTEXITCODE -ne 0) {
-        throw "SSH tunelis nutrūko (kodas $LASTEXITCODE). Paleiskite scenarijų iš naujo ir naudokite naują URL."
+        throw "Cloudflare tunelis nutrūko (kodas $LASTEXITCODE). Paleiskite scenarijų iš naujo ir naudokite naują URL."
     }
 }
 finally {
