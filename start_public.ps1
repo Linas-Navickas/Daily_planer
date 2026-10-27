@@ -53,7 +53,13 @@ try {
     Write-Host "Planuoklis paleistas. SSH tunelio išorinis adresas bus parodytas žemiau."
     Write-Host "Pirmą kartą prisijungiant SSH gali paprašyti patvirtinti localhost.run serverio raktą."
     Write-Host "Tunelio langą uždarykite su Ctrl+C."
-    & ssh -R 80:localhost:8000 nokey@localhost.run
+    & ssh -o ExitOnForwardFailure=yes `
+        -o ServerAliveInterval=60 `
+        -o ServerAliveCountMax=3 `
+        -R 80:localhost:8000 nokey@localhost.run
+    if ($LASTEXITCODE -ne 0) {
+        throw "SSH tunelis nutrūko (kodas $LASTEXITCODE). Paleiskite scenarijų iš naujo ir naudokite naują URL."
+    }
 }
 finally {
     if ($serverProcess -and -not $serverProcess.HasExited) {
