@@ -1,0 +1,165 @@
+openapi: 3.1.0
+info:
+  title: Mano planuoklio API
+  version: 1.0.0
+  description: API leidžia ChatGPT peržiūrėti, pridėti, atlikti ir ištrinti asmenines dienos užduotis.
+servers:
+  - url: https://YOUR-SERVICE.onrender.com
+    description: Pakeiskite šį adresą po viešo paskelbimo.
+security:
+  - bearerAuth: []
+paths:
+  /api/tasks:
+    get:
+      operationId: listTasks
+      summary: Peržiūrėti dienos užduotis
+      description: Grąžina visas nurodytos datos užduotis. Jei data nenurodyta, pirmiausia paklauskite vartotojo arba naudokite šiandienos datą.
+      parameters:
+        - name: date
+          in: query
+          required: true
+          description: Data ISO formatu YYYY-MM-DD.
+          schema:
+            type: string
+            format: date
+      responses:
+        "200":
+          description: Užduočių sąrašas
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  tasks:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/Task"
+                required: [tasks]
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+    post:
+      operationId: addTask
+      summary: Pridėti dienos užduotį
+      description: Prideda vieną užduotį nurodytai datai. Prieš siųsdami išsiaiškinkite užduoties tekstą ir datą; kategorija ir laikas pasirenkami.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/NewTask"
+      responses:
+        "201":
+          description: Sukurta užduotis
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  task:
+                    $ref: "#/components/schemas/Task"
+                required: [task]
+        "400":
+          description: Neteisingi užduoties duomenys
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+  /api/tasks/{taskId}:
+    patch:
+      operationId: updateTask
+      summary: Pažymėti užduotį atlikta arba neatlikta
+      description: Pakeičia tik atlikimo būseną. Prieš kviesdami patikrinkite tinkamos datos užduočių sąrašą.
+      parameters:
+        - name: taskId
+          in: path
+          required: true
+          schema:
+            type: integer
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                done:
+                  type: boolean
+              required: [done]
+      responses:
+        "200":
+          description: Atnaujinta užduotis
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  task:
+                    $ref: "#/components/schemas/Task"
+                required: [task]
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+    delete:
+      operationId: deleteTask
+      summary: Ištrinti užduotį
+      description: Ištrina nurodytą užduotį. Prieš ištrindami įsitikinkite su vartotoju, kad pasirinkta teisinga užduotis.
+      parameters:
+        - name: taskId
+          in: path
+          required: true
+          schema:
+            type: integer
+      responses:
+        "200":
+          description: Užduotis ištrinta
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  deleted:
+                    type: boolean
+                required: [deleted]
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+  responses:
+    Unauthorized:
+      description: Trūksta galiojančio prieigos rakto
+  schemas:
+    NewTask:
+      type: object
+      properties:
+        date:
+          type: string
+          format: date
+          description: Dienos data YYYY-MM-DD.
+        text:
+          type: string
+          minLength: 1
+          maxLength: 120
+        category:
+          type: string
+          enum: [Darbas, Asmeniniai, Sveikata, Kita]
+        time:
+          type: string
+          description: Laikas HH:MM arba tuščia eilutė.
+      required: [date, text, category]
+    Task:
+      type: object
+      properties:
+        id:
+          type: integer
+        date:
+          type: string
+          format: date
+        text:
+          type: string
+        category:
+          type: string
+        time:
+          type: string
+        done:
+          type: boolean
+      required: [id, date, text, category, time, done]
