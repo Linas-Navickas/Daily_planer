@@ -1,6 +1,7 @@
 $ErrorActionPreference = "Stop"
 $serverProcess = $null
 $password = $null
+Write-Host "Slaptažodžio simboliai nebus rodomi. Įveskite jį ir paspauskite Enter."
 $securePassword = Read-Host "Sugalvokite planuoklio slaptažodį" -AsSecureString
 $passwordPtr = [Runtime.InteropServices.Marshal]::SecureStringToBSTR($securePassword)
 
