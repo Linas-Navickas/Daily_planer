@@ -116,8 +116,8 @@ class PlannerHandler(SimpleHTTPRequestHandler):
 
     def do_GET(self):
         parsed = urlparse(self.path)
-        if parsed.path in ("/", "/index.html"):
-            self.path = "/index.html"
+        if parsed.path in ("/", "/index.html", "/app.js"):
+            self.path = "/index.html" if parsed.path == "/" else parsed.path
             return super().do_GET()
         if parsed.path == "/api/session":
             return self.send_json(200, {"authenticated": self.session_id() in SESSIONS})
@@ -163,7 +163,14 @@ class PlannerHandler(SimpleHTTPRequestHandler):
                     (day,),
                 ).fetchall()
             return self.send_json(200, {"tasks": [task_dict(row) for row in rows]})
-        return super().do_GET()
+        return self.send_json(404, {"error": "Nerasta."})
+
+    def do_HEAD(self):
+        parsed = urlparse(self.path)
+        if parsed.path in ("/", "/index.html", "/app.js"):
+            self.path = "/index.html" if parsed.path == "/" else parsed.path
+            return super().do_HEAD()
+        return self.send_error(404)
 
     def do_POST(self):
         parsed = urlparse(self.path)
