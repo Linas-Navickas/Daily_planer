@@ -22,7 +22,7 @@ function Read-MaskedPassword {
         }
         if (-not [char]::IsControl($key.KeyChar)) {
             $value.AppendChar($key.KeyChar)
-            [Console]::Write("•")
+            [Console]::Write(".")
         }
     }
 }
