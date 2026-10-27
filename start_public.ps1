@@ -1,6 +1,9 @@
 $ErrorActionPreference = "Stop"
 $serverProcess = $null
+$tunnelProcess = $null
 $password = $null
+$tunnelStdout = $null
+$tunnelStderr = $null
 
 function Read-MaskedPassword {
     param([string]$Prompt)
@@ -60,15 +63,62 @@ try {
     }
 
     Write-Host "Planuoklis paleistas. Cloudflare Quick Tunnel parodys laikiną HTTPS URL."
-    Write-Host "Tunelio langą uždarykite su Ctrl+C."
-    & $cloudflaredPath tunnel --url http://localhost:8000
-    if ($LASTEXITCODE -ne 0) {
-        throw "Cloudflare tunelis nutrūko (kodas $LASTEXITCODE). Paleiskite scenarijų iš naujo ir naudokite naują URL."
+    $tunnelStdout = Join-Path $env:TEMP ("planner-cloudflared-{0}.out.log" -f [guid]::NewGuid())
+    $tunnelStderr = Join-Path $env:TEMP ("planner-cloudflared-{0}.err.log" -f [guid]::NewGuid())
+    $tunnelProcess = Start-Process -FilePath $cloudflaredPath `
+        -ArgumentList @("tunnel", "--url", "http://localhost:8000") `
+        -PassThru `
+        -WindowStyle Hidden `
+        -RedirectStandardOutput $tunnelStdout `
+        -RedirectStandardError $tunnelStderr
+
+    $publicUrl = $null
+    $qrPath = Join-Path $PSScriptRoot "planner-qr.png"
+    Write-Host "Laukiama Cloudflare adreso..."
+    while (-not $tunnelProcess.HasExited -and -not $publicUrl) {
+        foreach ($logPath in @($tunnelStdout, $tunnelStderr)) {
+            if (Test-Path $logPath) {
+                $match = Select-String -Path $logPath -Pattern 'https://[a-z0-9-]+\.trycloudflare\.com' | Select-Object -First 1
+                if ($match) {
+                    $publicUrl = $match.Matches[0].Value
+                    break
+                }
+            }
+        }
+        if (-not $publicUrl) {
+            Start-Sleep -Milliseconds 500
+        }
+    }
+
+    if ($publicUrl) {
+        Write-Host "Viešas planuoklio adresas: $publicUrl"
+        & python -c "import qrcode,sys; qrcode.make(sys.argv[1]).save(sys.argv[2])" $publicUrl $qrPath
+        if ($LASTEXITCODE -eq 0) {
+            Write-Host "QR kodas atnaujintas: $qrPath"
+        }
+        else {
+            Write-Warning "QR kodo sukurti nepavyko. Įdiekite modulį: python -m pip install 'qrcode[pil]'"
+        }
+        Write-Host "Tunelis veiks tol, kol šis langas bus atidarytas. Sustabdykite su Ctrl+C."
+    }
+
+    while (-not $tunnelProcess.HasExited) {
+        Start-Sleep -Seconds 1
+    }
+    if ($tunnelProcess.ExitCode -ne 0) {
+        if (Test-Path $tunnelStderr) { Get-Content $tunnelStderr }
+        throw "Cloudflare tunelis nutrūko (kodas $($tunnelProcess.ExitCode)). Paleiskite scenarijų iš naujo ir naudokite naują URL."
     }
 }
 finally {
+    if ($tunnelProcess -and -not $tunnelProcess.HasExited) {
+        Stop-Process -Id $tunnelProcess.Id -Force
+    }
     if ($serverProcess -and -not $serverProcess.HasExited) {
         Stop-Process -Id $serverProcess.Id -Force
+    }
+    foreach ($logPath in @($tunnelStdout, $tunnelStderr)) {
+        if ($logPath -and (Test-Path $logPath)) { Remove-Item $logPath -Force }
     }
     $env:PLANNER_PASSWORD = $null
     $password = $null
