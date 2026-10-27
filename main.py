@@ -38,6 +38,23 @@ def initialize_database():
             created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
         )""")
         db.execute("CREATE INDEX IF NOT EXISTS tasks_by_date ON tasks(date, id)")
+        db.execute("""CREATE TABLE IF NOT EXISTS weights (
+            date TEXT PRIMARY KEY,
+            weight REAL NOT NULL,
+            created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+        )""")
+        db.execute("""CREATE TABLE IF NOT EXISTS steps (
+            date TEXT PRIMARY KEY,
+            count INTEGER NOT NULL,
+            created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+        )""")
+        db.execute("""CREATE TABLE IF NOT EXISTS vitals (
+            date TEXT PRIMARY KEY,
+            pulse INTEGER NOT NULL,
+            systolic INTEGER NOT NULL,
+            diastolic INTEGER NOT NULL,
+            created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+        )""")
 
 
 def task_dict(row):
@@ -104,6 +121,33 @@ class PlannerHandler(SimpleHTTPRequestHandler):
             return super().do_GET()
         if parsed.path == "/api/session":
             return self.send_json(200, {"authenticated": self.session_id() in SESSIONS})
+        if parsed.path == "/api/weights":
+            if not self.require_auth():
+                return
+            with sqlite3.connect(DB_PATH) as db:
+                rows = db.execute(
+                    "SELECT date, weight FROM weights ORDER BY date DESC LIMIT 365"
+                ).fetchall()
+            return self.send_json(200, {"weights": [{"date": row[0], "weight": row[1]} for row in rows]})
+        if parsed.path == "/api/steps":
+            if not self.require_auth():
+                return
+            with sqlite3.connect(DB_PATH) as db:
+                rows = db.execute(
+                    "SELECT date, count FROM steps ORDER BY date DESC LIMIT 365"
+                ).fetchall()
+            return self.send_json(200, {"steps": [{"date": row[0], "count": row[1]} for row in rows]})
+        if parsed.path == "/api/vitals":
+            if not self.require_auth():
+                return
+            with sqlite3.connect(DB_PATH) as db:
+                rows = db.execute(
+                    "SELECT date, pulse, systolic, diastolic FROM vitals ORDER BY date DESC LIMIT 365"
+                ).fetchall()
+            return self.send_json(200, {"vitals": [
+                {"date": row[0], "pulse": row[1], "systolic": row[2], "diastolic": row[3]}
+                for row in rows
+            ]})
         if parsed.path == "/api/tasks":
             if not self.require_auth():
                 return
@@ -123,6 +167,74 @@ class PlannerHandler(SimpleHTTPRequestHandler):
 
     def do_POST(self):
         parsed = urlparse(self.path)
+        if parsed.path == "/api/weights":
+            if not self.require_auth():
+                return
+            payload = self.read_json()
+            if not isinstance(payload, dict):
+                return self.send_json(400, {"error": "Netinkami duomenys."})
+            entry_date = str(payload.get("date", ""))
+            try:
+                date.fromisoformat(entry_date)
+                weight = float(payload.get("weight"))
+                if not 1 <= weight <= 500:
+                    raise ValueError
+            except (TypeError, ValueError):
+                return self.send_json(400, {"error": "Nurodykite tinkamą datą ir svorį (1–500 kg)."})
+            with sqlite3.connect(DB_PATH) as db:
+                db.execute(
+                    "INSERT INTO weights(date, weight) VALUES(?, ?) "
+                    "ON CONFLICT(date) DO UPDATE SET weight=excluded.weight, created_at=CURRENT_TIMESTAMP",
+                    (entry_date, weight),
+                )
+            return self.send_json(200, {"weight": {"date": entry_date, "weight": weight}})
+        if parsed.path == "/api/steps":
+            if not self.require_auth():
+                return
+            payload = self.read_json()
+            if not isinstance(payload, dict):
+                return self.send_json(400, {"error": "Netinkami duomenys."})
+            entry_date = str(payload.get("date", ""))
+            steps = payload.get("count")
+            try:
+                date.fromisoformat(entry_date)
+                if isinstance(steps, bool) or not isinstance(steps, int) or not 0 <= steps <= 200_000:
+                    raise ValueError
+            except ValueError:
+                return self.send_json(400, {"error": "Nurodykite tinkamą datą ir žingsnių skaičių (0–200 000)."})
+            with sqlite3.connect(DB_PATH) as db:
+                db.execute(
+                    "INSERT INTO steps(date, count) VALUES(?, ?) "
+                    "ON CONFLICT(date) DO UPDATE SET count=excluded.count, created_at=CURRENT_TIMESTAMP",
+                    (entry_date, steps),
+                )
+            return self.send_json(200, {"steps": {"date": entry_date, "count": steps}})
+        if parsed.path == "/api/vitals":
+            if not self.require_auth():
+                return
+            payload = self.read_json()
+            if not isinstance(payload, dict):
+                return self.send_json(400, {"error": "Netinkami duomenys."})
+            entry_date = str(payload.get("date", ""))
+            pulse, systolic, diastolic = payload.get("pulse"), payload.get("systolic"), payload.get("diastolic")
+            try:
+                date.fromisoformat(entry_date)
+                if any(isinstance(value, bool) or not isinstance(value, int) for value in (pulse, systolic, diastolic)):
+                    raise ValueError
+                if not 20 <= pulse <= 250 or not 40 <= systolic <= 300 or not 20 <= diastolic <= 200 or systolic <= diastolic:
+                    raise ValueError
+            except ValueError:
+                return self.send_json(400, {"error": "Patikrinkite datą, pulsą ir kraujospūdžio rodmenis."})
+            with sqlite3.connect(DB_PATH) as db:
+                db.execute(
+                    "INSERT INTO vitals(date, pulse, systolic, diastolic) VALUES(?, ?, ?, ?) "
+                    "ON CONFLICT(date) DO UPDATE SET pulse=excluded.pulse, systolic=excluded.systolic, "
+                    "diastolic=excluded.diastolic, created_at=CURRENT_TIMESTAMP",
+                    (entry_date, pulse, systolic, diastolic),
+                )
+            return self.send_json(200, {"vitals": {
+                "date": entry_date, "pulse": pulse, "systolic": systolic, "diastolic": diastolic
+            }})
         if parsed.path == "/api/login":
             payload = self.read_json()
             password = payload.get("password", "") if isinstance(payload, dict) else ""
@@ -204,6 +316,45 @@ class PlannerHandler(SimpleHTTPRequestHandler):
         return self.send_json(200, {"task": task_dict(row)})
 
     def do_DELETE(self):
+        if self.path.startswith("/api/vitals/"):
+            if not self.require_auth():
+                return
+            entry_date = self.path.rsplit("/", 1)[1]
+            try:
+                date.fromisoformat(entry_date)
+            except ValueError:
+                return self.send_json(400, {"error": "Neteisinga data."})
+            with sqlite3.connect(DB_PATH) as db:
+                result = db.execute("DELETE FROM vitals WHERE date=?", (entry_date,))
+            if not result.rowcount:
+                return self.send_json(404, {"error": "Sveikatos įrašas nerastas."})
+            return self.send_json(200, {"deleted": True})
+        if self.path.startswith("/api/steps/"):
+            if not self.require_auth():
+                return
+            entry_date = self.path.rsplit("/", 1)[1]
+            try:
+                date.fromisoformat(entry_date)
+            except ValueError:
+                return self.send_json(400, {"error": "Neteisinga data."})
+            with sqlite3.connect(DB_PATH) as db:
+                result = db.execute("DELETE FROM steps WHERE date=?", (entry_date,))
+            if not result.rowcount:
+                return self.send_json(404, {"error": "Žingsnių įrašas nerastas."})
+            return self.send_json(200, {"deleted": True})
+        if self.path.startswith("/api/weights/"):
+            if not self.require_auth():
+                return
+            entry_date = self.path.rsplit("/", 1)[1]
+            try:
+                date.fromisoformat(entry_date)
+            except ValueError:
+                return self.send_json(400, {"error": "Neteisinga data."})
+            with sqlite3.connect(DB_PATH) as db:
+                result = db.execute("DELETE FROM weights WHERE date=?", (entry_date,))
+            if not result.rowcount:
+                return self.send_json(404, {"error": "Svorio įrašas nerastas."})
+            return self.send_json(200, {"deleted": True})
         if not self.path.startswith("/api/tasks/"):
             return self.send_json(404, {"error": "Nerasta."})
         if not self.require_auth():
