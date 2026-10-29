@@ -15,7 +15,8 @@ from mcp_server import PlannerMCPMixin
 
 
 ROOT = Path(__file__).resolve().parent
-HOST = "0.0.0.0"
+MCP_TUNNEL_MODE = os.environ.get("MCP_TUNNEL_MODE", "") == "1"
+HOST = "127.0.0.1" if MCP_TUNNEL_MODE else os.environ.get("HOST", "0.0.0.0")
 PORT = int(os.environ.get("PORT", "8000"))
 DATA_DIR = Path(os.environ.get("DATA_DIR", str(ROOT / "data")))
 DB_PATH = DATA_DIR / "planner.sqlite3"
@@ -88,6 +89,7 @@ def task_dict(row):
 class PlannerHandler(PlannerMCPMixin, SimpleHTTPRequestHandler):
     DB_PATH = DB_PATH
     PLANNER_PASSWORD = PLANNER_PASSWORD
+    MCP_TUNNEL_MODE = MCP_TUNNEL_MODE
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, directory=str(ROOT), **kwargs)
@@ -204,84 +206,6 @@ class PlannerHandler(PlannerMCPMixin, SimpleHTTPRequestHandler):
         parsed = urlparse(self.path)
         if self.handle_mcp_post(parsed):
             return
-        if parsed.path == "/api/import":
-            if not self.require_auth():
-                return
-            payload = self.read_json()
-            groups = ("tasks", "weights", "steps", "vitals")
-            if not isinstance(payload, dict) or any(key not in groups for key in payload):
-                return self.send_json(400, {"error": "Neteisingas importo formatas."})
-            records = {key: payload.get(key, []) for key in groups}
-            if any(not isinstance(records[key], list) for key in groups) or sum(map(len, records.values())) > 100:
-                return self.send_json(400, {"error": "Importe turi būti sąrašai, iš viso iki 100 įrašų."})
-            normalized = {key: [] for key in groups}
-            try:
-                def valid_entry_date(value):
-                    parsed_date = date.fromisoformat(value)
-                    if parsed_date.isoformat() != value:
-                        raise ValueError
-                    return value
-
-                for item in records["tasks"]:
-                    if not isinstance(item, dict):
-                        raise ValueError("Netinkamas užduoties įrašas.")
-                    task_date = valid_entry_date(item.get("date"))
-                    task_text = item.get("text", "")
-                    category = item.get("category", "Kita")
-                    task_time = item.get("time", "")
-                    if not isinstance(task_text, str) or not task_text.strip() or len(task_text.strip()) > 120:
-                        raise ValueError("Užduoties tekstas turi būti nuo 1 iki 120 simbolių.")
-                    if category not in CATEGORIES or not isinstance(category, str):
-                        raise ValueError("Neteisinga užduoties kategorija.")
-                    if not isinstance(task_time, str) or (task_time and time.fromisoformat(task_time).strftime("%H:%M") != task_time):
-                        raise ValueError("Laikas turi būti HH:MM formatu.")
-                    normalized["tasks"].append((task_date, task_text.strip(), category, task_time))
-
-                for item in records["weights"]:
-                    if not isinstance(item, dict):
-                        raise ValueError("Netinkamas svorio įrašas.")
-                    entry_date, weight = valid_entry_date(item.get("date")), item.get("weight")
-                    if isinstance(weight, bool) or not isinstance(weight, (int, float)) or not 1 <= weight <= 500:
-                        raise ValueError("Svoris turi būti nuo 1 iki 500 kg.")
-                    normalized["weights"].append((entry_date, weight))
-
-                for item in records["steps"]:
-                    if not isinstance(item, dict):
-                        raise ValueError("Netinkamas žingsnių įrašas.")
-                    entry_date, count = valid_entry_date(item.get("date")), item.get("count")
-                    if isinstance(count, bool) or not isinstance(count, int) or not 0 <= count <= 200000:
-                        raise ValueError("Žingsnių skaičius turi būti nuo 0 iki 200 000.")
-                    normalized["steps"].append((entry_date, count))
-
-                for item in records["vitals"]:
-                    if not isinstance(item, dict):
-                        raise ValueError("Netinkamas sveikatos įrašas.")
-                    entry_date = valid_entry_date(item.get("date"))
-                    pulse, systolic, diastolic = (item.get(key) for key in ("pulse", "systolic", "diastolic"))
-                    if any(isinstance(value, bool) or not isinstance(value, int) for value in (pulse, systolic, diastolic)):
-                        raise ValueError("Pulso ir kraujospūdžio reikšmės turi būti sveiki skaičiai.")
-                    if not 20 <= pulse <= 250 or not 40 <= systolic <= 300 or not 20 <= diastolic <= 200 or systolic <= diastolic:
-                        raise ValueError("Patikrinkite pulso ir kraujospūdžio rodmenis.")
-                    normalized["vitals"].append((entry_date, pulse, systolic, diastolic))
-
-                with sqlite3.connect(DB_PATH) as db:
-                    db.executemany("INSERT INTO tasks(date,text,category,time) VALUES(?,?,?,?)", normalized["tasks"])
-                    db.executemany(
-                        "INSERT INTO weights(date,weight) VALUES(?,?) ON CONFLICT(date) DO UPDATE SET weight=excluded.weight,created_at=CURRENT_TIMESTAMP",
-                        normalized["weights"],
-                    )
-                    db.executemany(
-                        "INSERT INTO steps(date,count) VALUES(?,?) ON CONFLICT(date) DO UPDATE SET count=excluded.count,created_at=CURRENT_TIMESTAMP",
-                        normalized["steps"],
-                    )
-                    db.executemany(
-                        "INSERT INTO vitals(date,pulse,systolic,diastolic) VALUES(?,?,?,?) ON CONFLICT(date) DO UPDATE SET pulse=excluded.pulse,systolic=excluded.systolic,diastolic=excluded.diastolic,created_at=CURRENT_TIMESTAMP",
-                        normalized["vitals"],
-                    )
-            except (ValueError, TypeError, sqlite3.Error) as error:
-                return self.send_json(400, {"error": str(error) or "Netinkami importo duomenys."})
-            counts = {key: len(normalized[key]) for key in groups}
-            return self.send_json(201, {"counts": counts, "tasks_dates": sorted({item[0] for item in normalized["tasks"]})})
         if parsed.path == "/api/weights":
             if not self.require_auth():
                 return

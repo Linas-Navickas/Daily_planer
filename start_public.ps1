@@ -10,7 +10,13 @@ function Read-MaskedPassword {
     Write-Host -NoNewline $Prompt
     $value = New-Object System.Security.SecureString
     while ($true) {
-        $key = [Console]::ReadKey($true)
+        try {
+            $key = [Console]::ReadKey($true)
+        }
+        catch [System.InvalidOperationException] {
+            Write-Host "`nŠis terminalas nepalaiko slapto įvedimo taškeliais. Įveskite slaptažodį į saugų įvedimo lauką."
+            return Read-Host -Prompt $Prompt -AsSecureString
+        }
         if ($key.Key -eq [ConsoleKey]::Enter) {
             [Console]::WriteLine()
             $value.MakeReadOnly()
@@ -41,6 +47,7 @@ try {
 
     $env:PLANNER_PASSWORD = $password
     $env:PORT = "8000"
+    $env:HOST = "127.0.0.1"
     $serverPath = Join-Path $PSScriptRoot "main.py"
     $serverProcess = Start-Process -FilePath "python" `
         -ArgumentList @("-u", "`"$serverPath`"") `
@@ -48,9 +55,22 @@ try {
         -PassThru `
         -WindowStyle Hidden
 
-    Start-Sleep -Seconds 2
-    if ($serverProcess.HasExited) {
-        throw "Planuoklio serveris nepasileido. Patikrinkite, ar įdiegtas Python."
+    $ready = $false
+    for ($attempt = 0; $attempt -lt 30; $attempt++) {
+        if ($serverProcess.HasExited) {
+            throw "Planuoklio serveris nepasileido. Patikrinkite, ar įdiegtas Python ir ar prievadas 8000 laisvas."
+        }
+        $client = New-Object System.Net.Sockets.TcpClient
+        try {
+            $client.Connect("127.0.0.1", 8000)
+            $ready = $true
+            break
+        }
+        catch { Start-Sleep -Milliseconds 300 }
+        finally { $client.Dispose() }
+    }
+    if (-not $ready) {
+        throw "Planuoklio serveris neatsiliepė per 9 sekundes."
     }
 
     $cloudflaredPath = Join-Path $PSScriptRoot ".tools\cloudflared.exe"
@@ -66,7 +86,7 @@ try {
     $tunnelStdout = Join-Path $env:TEMP ("planner-cloudflared-{0}.out.log" -f [guid]::NewGuid())
     $tunnelStderr = Join-Path $env:TEMP ("planner-cloudflared-{0}.err.log" -f [guid]::NewGuid())
     $tunnelProcess = Start-Process -FilePath $cloudflaredPath `
-        -ArgumentList @("tunnel", "--url", "http://localhost:8000") `
+        -ArgumentList @("tunnel", "--url", "http://127.0.0.1:8000") `
         -PassThru `
         -WindowStyle Hidden `
         -RedirectStandardOutput $tunnelStdout `
@@ -92,6 +112,7 @@ try {
 
     if ($publicUrl) {
         Write-Host "Viešas planuoklio adresas: $publicUrl"
+        Write-Host "ChatGPT papildinio pastoviam MCP ryšiui paleiskite start_secure_mcp.ps1; šis Quick Tunnel skirtas planuoklio svetainei."
         $qrGeneratorPath = Join-Path $PSScriptRoot "generate_qr.py"
         & python $qrGeneratorPath $publicUrl $qrPath
         if ($LASTEXITCODE -eq 0) {
@@ -105,6 +126,10 @@ try {
         }
         Start-Process -FilePath $qrPath
         Write-Host "QR kodas atidarytas vaizdų peržiūros programoje."
+        $localUrl = "http://127.0.0.1:8000"
+        Start-Process -FilePath $localUrl
+        Write-Host "Planuoklis atidarytas kompiuterio naršyklėje: $localUrl"
+        Write-Host "Telefone naudokite QR kodą arba viešą adresą: $publicUrl"
         Write-Host "Tunelis veiks tol, kol šis langas bus atidarytas. Sustabdykite su Ctrl+C."
     }
     else {
@@ -133,6 +158,8 @@ finally {
         if ($logPath -and (Test-Path $logPath)) { Remove-Item $logPath -Force }
     }
     $env:PLANNER_PASSWORD = $null
+    $env:HOST = $null
+    $env:PORT = $null
     $password = $null
     [Runtime.InteropServices.Marshal]::ZeroFreeBSTR($passwordPtr)
 }

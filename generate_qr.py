@@ -1,4 +1,5 @@
 import sys
+from io import BytesIO
 from pathlib import Path
 
 
@@ -18,7 +19,10 @@ def main() -> int:
         return 1
 
     try:
-        qrcode.make(url).save(output_path)
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        image_data = BytesIO()
+        qrcode.make(url).save(image_data, format="PNG")
+        output_path.write_bytes(image_data.getvalue())
     except Exception as error:
         print(f"Could not create QR image: {error}", file=sys.stderr)
         return 1

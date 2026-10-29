@@ -25,6 +25,9 @@ MCP_LOGIN_ATTEMPTS = {}
 class PlannerMCPMixin:
     """MCP and OAuth endpoints mixed into the planner's existing HTTP handler."""
 
+    def mcp_tunnel_mode(self):
+        return bool(getattr(self, "MCP_TUNNEL_MODE", False))
+
     def mcp_origin(self):
         host = self.headers.get("Host", "localhost:8000")
         forwarded_proto = self.headers.get("X-Forwarded-Proto", "").split(",", 1)[0].strip().lower()
@@ -78,6 +81,8 @@ class PlannerMCPMixin:
             db.close()
 
     def mcp_metadata(self, path):
+        if self.mcp_tunnel_mode():
+            return None
         origin = self.mcp_origin()
         if path == "/.well-known/oauth-protected-resource":
             return {
@@ -324,8 +329,8 @@ class PlannerMCPMixin:
         })
 
     def mcp_tool_definitions(self):
-        read_auth = [{"type": "oauth2", "scopes": [READ_SCOPE]}]
-        write_auth = [{"type": "oauth2", "scopes": [WRITE_SCOPE]}]
+        read_auth = [{"type": "noauth"}] if self.mcp_tunnel_mode() else [{"type": "oauth2", "scopes": [READ_SCOPE]}]
+        write_auth = [{"type": "noauth"}] if self.mcp_tunnel_mode() else [{"type": "oauth2", "scopes": [WRITE_SCOPE]}]
         return [
             {
                 "name": "get_day_summary", "title": "Peržiūrėti dienos planą",
@@ -344,6 +349,37 @@ class PlannerMCPMixin:
                     "time": {"type": "string", "description": "Optional time HH:MM"},
                 }, "required": ["date", "text"], "additionalProperties": False},
                 "annotations": {"readOnlyHint": False, "destructiveHint": False, "idempotentHint": False, "openWorldHint": False},
+                "securitySchemes": write_auth,
+            },
+            {
+                "name": "mark_task_done", "title": "Pažymėti užduotį atlikta",
+                "description": "Pažymi pasirinktą užduotį atlikta arba vėl neatlikta. Pirmiausia peržiūrėk atitinkamos dienos planą ir naudok tikslų užduoties ID. done=true reiškia atlikta, done=false — neatlikta.",
+                "inputSchema": {"type": "object", "properties": {
+                    "task_id": {"type": "integer", "minimum": 1}, "done": {"type": "boolean"},
+                }, "required": ["task_id", "done"], "additionalProperties": False},
+                "annotations": {"readOnlyHint": False, "destructiveHint": False, "idempotentHint": True, "openWorldHint": False},
+                "securitySchemes": write_auth,
+            },
+            {
+                "name": "update_task", "title": "Redaguoti planuoklio užduotį",
+                "description": "Redaguoja užduotį pagal jos ID. Pirmiausia peržiūrėk dienos planą. Pakeisk tik pateiktus laukus: tekstą, datą, kategoriją arba laiką. Jei neaišku, kurią užduotį ar reikšmę keisti, paklausk vartotojo.",
+                "inputSchema": {"type": "object", "properties": {
+                    "task_id": {"type": "integer", "minimum": 1},
+                    "date": {"type": "string", "format": "date"},
+                    "text": {"type": "string", "minLength": 1, "maxLength": 120},
+                    "category": {"type": "string", "enum": sorted(CATEGORIES)},
+                    "time": {"type": "string", "description": "HH:MM arba tuščia eilutė"},
+                }, "required": ["task_id"], "additionalProperties": False},
+                "annotations": {"readOnlyHint": False, "destructiveHint": False, "idempotentHint": True, "openWorldHint": False},
+                "securitySchemes": write_auth,
+            },
+            {
+                "name": "delete_task", "title": "Ištrinti planuoklio užduotį",
+                "description": "Ištrina užduotį pagal jos ID. Pirmiausia peržiūrėk dienos planą, įvardyk pasirinktą užduotį ir prieš ištrindamas paprašyk vartotojo patvirtinimo.",
+                "inputSchema": {"type": "object", "properties": {
+                    "task_id": {"type": "integer", "minimum": 1},
+                }, "required": ["task_id"], "additionalProperties": False},
+                "annotations": {"readOnlyHint": False, "destructiveHint": True, "idempotentHint": True, "openWorldHint": False},
                 "securitySchemes": write_auth,
             },
             {
@@ -379,7 +415,8 @@ class PlannerMCPMixin:
     def mcp_instructions(self):
         return (
             "Esu asmeninio planuoklio jungtis. Prieš įrašydamas duomenis patikrink, kad aiškūs jų tipas ir data. "
-            "Užduotis dėk į dienos užduotis; kūno svorį, žingsnius ir pulsą/kraujospūdį rašyk tik į atitinkamus laukus. "
+            "Užduotis dėk į dienos užduotis; skaityk, pažymėk atlikta, redaguok arba ištrink užduotis pagal vartotojo komandą. "
+            "Kūno svorį, žingsnius ir pulsą/kraujospūdį rašyk tik į atitinkamus laukus. "
             "Jei trūksta datos ar vertės, paklausk. Po įrašymo patvirtink, kas išsaugota. Nediagnozuok pagal sveikatos rodmenis."
         )
 
@@ -395,18 +432,27 @@ class PlannerMCPMixin:
 
         method = message.get("method")
         request_id = message.get("id")
+        if not isinstance(method, str) or not method:
+            self.mcp_json(200, {"jsonrpc": "2.0", "id": request_id, "error": {"code": -32600, "message": "Invalid request"}})
+            return True
         if method == "notifications/initialized" or (method and method.startswith("notifications/")):
             self.mcp_json(202, {})
             return True
+        params = message.get("params", {})
+        if params is None:
+            params = {}
+        if not isinstance(params, dict):
+            self.mcp_json(200, {"jsonrpc": "2.0", "id": request_id, "error": {"code": -32602, "message": "Invalid params"}})
+            return True
         if method == "initialize":
-            requested = message.get("params", {}).get("protocolVersion", "2025-03-26")
-            if requested not in SUPPORTED_PROTOCOLS:
+            requested = params.get("protocolVersion", "2025-03-26")
+            if not isinstance(requested, str) or requested not in SUPPORTED_PROTOCOLS:
                 self.mcp_json(200, {"jsonrpc": "2.0", "id": request_id, "error": {"code": -32602, "message": "Unsupported protocol version"}})
                 return True
             self.mcp_json(200, {"jsonrpc": "2.0", "id": request_id, "result": {
                 "protocolVersion": requested,
                 "capabilities": {"tools": {"listChanged": False}},
-                "serverInfo": {"name": "daily-planner", "title": "Mano dienos planuoklis", "version": "1.0.0"},
+                "serverInfo": {"name": "daily-planner", "title": "Mano dienos planuoklis", "version": "1.1.0"},
                 "instructions": self.mcp_instructions(),
             }})
             return True
@@ -417,18 +463,18 @@ class PlannerMCPMixin:
             self.mcp_json(200, {"jsonrpc": "2.0", "id": request_id, "result": {"tools": self.mcp_tool_definitions(), "nextCursor": None}})
             return True
         if method == "tools/call":
-            params = message.get("params") or {}
             name = params.get("name")
             definition = next((tool for tool in self.mcp_tool_definitions() if tool["name"] == name), None)
             if not definition:
                 self.mcp_json(200, {"jsonrpc": "2.0", "id": request_id, "result": {"content": [{"type": "text", "text": "Nežinomas planuoklio veiksmas."}], "isError": True}})
                 return True
             scope = WRITE_SCOPE if not definition["annotations"].get("readOnlyHint") else READ_SCOPE
-            access = self.mcp_access(scope)
-            if not access or "missing_scope" in access:
-                reason = "Prisijunk prie planuoklio, kad galėtum naudoti šį veiksmą."
-                self.mcp_auth_error(request_id, reason, scope)
-                return True
+            if not self.mcp_tunnel_mode():
+                access = self.mcp_access(scope)
+                if not access or "missing_scope" in access:
+                    reason = "Prisijunk prie planuoklio, kad galėtum naudoti šį veiksmą."
+                    self.mcp_auth_error(request_id, reason, scope)
+                    return True
             try:
                 result = self.mcp_call_tool(name, params.get("arguments") or {})
                 self.mcp_json(200, {"jsonrpc": "2.0", "id": request_id, "result": {
@@ -450,11 +496,15 @@ class PlannerMCPMixin:
     def mcp_call_tool(self, name, args):
         if not isinstance(args, dict):
             raise ValueError("Neteisingi įrankio duomenys.")
-        entry_date = str(args.get("date", ""))
-        try:
-            date.fromisoformat(entry_date)
-        except ValueError:
-            raise ValueError("Nurodyk datą formatu YYYY-MM-DD.")
+        entry_date = None
+        if name not in ("mark_task_done", "update_task", "delete_task"):
+            entry_date = str(args.get("date", ""))
+            try:
+                parsed_date = date.fromisoformat(entry_date)
+                if parsed_date.isoformat() != entry_date:
+                    raise ValueError
+            except ValueError:
+                raise ValueError("Nurodyk datą formatu YYYY-MM-DD.")
 
         with self.mcp_db() as db:
             if name in ("get_day_summary", "list_tasks"):
@@ -492,6 +542,70 @@ class PlannerMCPMixin:
                     (entry_date, text, category, task_time),
                 )
                 return {"saved": True, "type": "task", "id": cursor.lastrowid, "date": entry_date, "text": text, "category": category, "time": task_time}
+
+            if name in ("mark_task_done", "update_task", "delete_task"):
+                task_id = args.get("task_id")
+                if isinstance(task_id, bool) or not isinstance(task_id, int) or task_id < 1:
+                    raise ValueError("Nurodyk galiojantį užduoties numerį.")
+                row = db.execute(
+                    "SELECT id, date, text, category, time, done FROM tasks WHERE id=?", (task_id,)
+                ).fetchone()
+                if not row:
+                    raise ValueError("Tokios užduoties planuoklyje nėra.")
+
+                if name == "delete_task":
+                    db.execute("DELETE FROM tasks WHERE id=?", (task_id,))
+                    return {"deleted": True, "id": task_id, "date": row[1], "text": row[2]}
+
+                if name == "mark_task_done":
+                    done = args.get("done")
+                    if not isinstance(done, bool):
+                        raise ValueError("Nurodyk atlikimo būseną true arba false.")
+                    db.execute("UPDATE tasks SET done=? WHERE id=?", (int(done), task_id))
+                else:
+                    updates = {}
+                    if "date" in args:
+                        new_date = args["date"]
+                        try:
+                            parsed_date = date.fromisoformat(new_date)
+                            if parsed_date.isoformat() != new_date:
+                                raise ValueError
+                        except (TypeError, ValueError):
+                            raise ValueError("Nurodyk datą formatu YYYY-MM-DD.")
+                        updates["date"] = new_date
+                    if "text" in args:
+                        text = args["text"].strip() if isinstance(args["text"], str) else ""
+                        if not text or len(text) > 120:
+                            raise ValueError("Užduoties tekstas turi būti nuo 1 iki 120 simbolių.")
+                        updates["text"] = text
+                    if "category" in args:
+                        if args["category"] not in CATEGORIES:
+                            raise ValueError("Nurodyk galiojančią užduoties kategoriją.")
+                        updates["category"] = args["category"]
+                    if "time" in args:
+                        task_time = args["time"]
+                        if not isinstance(task_time, str):
+                            raise ValueError("Laiką nurodyk formatu HH:MM.")
+                        try:
+                            if task_time:
+                                time.fromisoformat(task_time)
+                        except ValueError:
+                            raise ValueError("Laiką nurodyk formatu HH:MM.")
+                        updates["time"] = task_time
+                    if not updates:
+                        raise ValueError("Pateik bent vieną lauką, kurį reikia pakeisti.")
+                    assignments = ", ".join(f"{column}=?" for column in updates)
+                    db.execute(
+                        f"UPDATE tasks SET {assignments} WHERE id=?",
+                        (*updates.values(), task_id),
+                    )
+                updated = db.execute(
+                    "SELECT id, date, text, category, time, done FROM tasks WHERE id=?", (task_id,)
+                ).fetchone()
+                return {"updated": True, "task": {
+                    "id": updated[0], "date": updated[1], "text": updated[2],
+                    "category": updated[3], "time": updated[4], "done": bool(updated[5]),
+                }}
 
             if name == "record_weight":
                 raw = args.get("weight")
