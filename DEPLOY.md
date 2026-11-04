@@ -1,10 +1,10 @@
 # Planuoklio paleidimas
 
-Planuoklis yra Python HTTP programa, kuri saugo duomenis SQLite duomenų bazėje `data/planner.sqlite3`. Aplankas `data/` neįkeliamas į Git.
+Planuoklis yra Python HTTP programa, kuri saugo duomenis SQLite duomenų bazėje `data/planner.sqlite3`. Užklausų duomenis tikrina Pydantic modeliai faile `schemas.py`, o SQLite schemos pakeitimai saugomi `migrations/versions/` Alembic migracijose. Migracijos pritaikomos automatiškai paleidžiant serverį. Esama duomenų bazė išsaugoma. Aplankas `data/` neįkeliamas į Git.
 
 ## Svetainė kompiuteryje ir telefone
 
-1. Įdiekite projekto priklausomybes: `python -m pip install -r requirements.txt`.
+1. Įdiekite projekto priklausomybes: `python -m pip install -r requirements.txt` (įdiegiami Pydantic ir Alembic).
 2. Įdiekite `cloudflared` arba įdėkite `cloudflared.exe` į `.tools/`.
 3. VS Code lange pasirinkite **Run and Debug → Paleisti viešą planuoklį** arba atidarykite PowerShell projekto aplanke ir paleiskite `start_public.ps1`.
 4. Įveskite bent 12 simbolių planuoklio slaptažodį. Scenarijus paleis serverį ir laikiną Cloudflare Quick Tunnel, atidarys QR kodą ir planuoklį kompiuterio naršyklėje.
@@ -23,7 +23,7 @@ Pirmą kartą:
 3. Paleiskite `configure_secure_mcp.ps1`; įveskite tunelio ID ir runtime API raktą. Raktas įvedamas užmaskuotai ir neįrašomas į projekto failus.
 4. ChatGPT **Add custom MCP server** lange pasirinkite **Tunnel**, tą patį tunelį ir **No authentication**, tada sukurkite bei įdiekite programėlę.
 
-Kiekvieną kartą naudodami MCP įrankius paleiskite `start_secure_mcp.ps1` ir įveskite runtime raktą. Jis nėra tas pats, kas planuoklio svetainės slaptažodis. Niekada nedėkite runtime rakto į Git.
+Kiekvieną kartą naudodami MCP įrankius paleiskite `start_secure_mcp.ps1`. Runtime raktas pirmą kartą įrašomas į `.env`, kurį saugo `.gitignore`; vėliau scenarijus jį nuskaito automatiškai. Jis nėra tas pats, kas planuoklio svetainės slaptažodis. Niekada nedėkite runtime rakto į Git.
 
 Svetainės tunelis ir MCP tunelis yra atskiri. Juos galima paleisti vienu metu dviejuose terminaluose; jie naudoja skirtingus prievadus, bet tą pačią SQLite duomenų bazę.
 

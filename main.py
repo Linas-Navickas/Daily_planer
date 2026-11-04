@@ -4,14 +4,19 @@ from http.cookies import SimpleCookie
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, urlparse
-from datetime import date, time
+from datetime import date
+from hashlib import sha256
 import hmac
 import json
 import os
 import secrets
 import sqlite3
 from time import monotonic
+from alembic import command
+from alembic.config import Config
+from pydantic import ValidationError
 from mcp_server import PlannerMCPMixin
+from schemas import LoginRequest, StepsRequest, TaskCreateRequest, TaskDoneRequest, VitalsRequest, WeightRequest
 
 
 ROOT = Path(__file__).resolve().parent
@@ -22,68 +27,35 @@ DATA_DIR = Path(os.environ.get("DATA_DIR", str(ROOT / "data")))
 DB_PATH = DATA_DIR / "planner.sqlite3"
 PLANNER_PASSWORD = os.environ.get("PLANNER_PASSWORD", "")
 CHATGPT_API_KEY = os.environ.get("CHATGPT_API_KEY", "")
+DEV_AUTO_RELOAD = os.environ.get("DEV_AUTO_RELOAD", "") == "1"
 SESSIONS = set()
 LOGIN_ATTEMPTS = {}
-CATEGORIES = {"Darbas", "Asmeniniai", "Sveikata", "Kita"}
+
+
+def app_source_version():
+    source_files = [ROOT / "main.py", ROOT / "schemas.py", ROOT / "index.html", ROOT / "app.js"]
+    migration_dir = ROOT / "migrations" / "versions"
+    if migration_dir.exists():
+        source_files.extend(sorted(migration_dir.glob("*.py")))
+    digest = sha256()
+    for source in source_files:
+        if source.is_file():
+            digest.update(source.relative_to(ROOT).as_posix().encode("utf-8"))
+            digest.update(source.read_bytes())
+    return digest.hexdigest()
 
 
 def initialize_database():
     DATA_DIR.mkdir(parents=True, exist_ok=True)
-    with sqlite3.connect(DB_PATH) as db:
-        db.execute("""CREATE TABLE IF NOT EXISTS tasks (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            date TEXT NOT NULL,
-            text TEXT NOT NULL,
-            category TEXT NOT NULL,
-            time TEXT NOT NULL DEFAULT '',
-            done INTEGER NOT NULL DEFAULT 0,
-            created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
-        )""")
-        db.execute("CREATE INDEX IF NOT EXISTS tasks_by_date ON tasks(date, id)")
-        db.execute("""CREATE TABLE IF NOT EXISTS weights (
-            date TEXT PRIMARY KEY,
-            weight REAL NOT NULL,
-            created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
-        )""")
-        db.execute("""CREATE TABLE IF NOT EXISTS steps (
-            date TEXT PRIMARY KEY,
-            count INTEGER NOT NULL,
-            created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
-        )""")
-        db.execute("""CREATE TABLE IF NOT EXISTS vitals (
-            date TEXT PRIMARY KEY,
-            pulse INTEGER NOT NULL,
-            systolic INTEGER NOT NULL,
-            diastolic INTEGER NOT NULL,
-            created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
-        )""")
-        db.execute("""CREATE TABLE IF NOT EXISTS oauth_clients (
-            client_id TEXT PRIMARY KEY,
-            client_name TEXT NOT NULL,
-            redirect_uris TEXT NOT NULL,
-            created_at REAL NOT NULL
-        )""")
-        db.execute("""CREATE TABLE IF NOT EXISTS oauth_codes (
-            code_hash TEXT PRIMARY KEY,
-            client_id TEXT NOT NULL,
-            redirect_uri TEXT NOT NULL,
-            code_challenge TEXT NOT NULL,
-            resource TEXT NOT NULL,
-            scopes TEXT NOT NULL,
-            expires_at REAL NOT NULL
-        )""")
-        db.execute("""CREATE TABLE IF NOT EXISTS oauth_tokens (
-            token_hash TEXT PRIMARY KEY,
-            client_id TEXT NOT NULL,
-            resource TEXT NOT NULL,
-            scopes TEXT NOT NULL,
-            expires_at REAL NOT NULL
-        )""")
+    config = Config(str(ROOT / "alembic.ini"))
+    database_url = "sqlite:///" + DB_PATH.as_posix().replace("%", "%%")
+    config.set_main_option("sqlalchemy.url", database_url)
+    command.upgrade(config, "head")
 
 
 def task_dict(row):
     return {"id": row[0], "date": row[1], "text": row[2], "category": row[3],
-            "time": row[4], "done": bool(row[5])}
+            "time": row[4], "location": row[5], "done": bool(row[6])}
 
 
 class PlannerHandler(PlannerMCPMixin, SimpleHTTPRequestHandler):
@@ -120,6 +92,13 @@ class PlannerHandler(PlannerMCPMixin, SimpleHTTPRequestHandler):
         except (ValueError, json.JSONDecodeError):
             return None
 
+    def validate_json(self, model, error_message):
+        try:
+            return model.model_validate(self.read_json())
+        except ValidationError:
+            self.send_json(400, {"error": error_message})
+            return None
+
     def session_id(self):
         cookie = SimpleCookie()
         try:
@@ -146,6 +125,12 @@ class PlannerHandler(PlannerMCPMixin, SimpleHTTPRequestHandler):
         parsed = urlparse(self.path)
         if self.handle_mcp_get(parsed):
             return
+        if parsed.path == "/api/dev-version":
+            is_local = self.client_address[0] in ("127.0.0.1", "::1")
+            is_tunneled = bool(self.headers.get("CF-Connecting-IP"))
+            if not DEV_AUTO_RELOAD or not is_local or is_tunneled:
+                return self.send_json(404, {"error": "Nerasta."})
+            return self.send_json(200, {"version": app_source_version()})
         if parsed.path in ("/", "/index.html", "/app.js"):
             self.path = "/index.html" if parsed.path == "/" else parsed.path
             return super().do_GET()
@@ -189,7 +174,7 @@ class PlannerHandler(PlannerMCPMixin, SimpleHTTPRequestHandler):
                 return self.send_json(400, {"error": "Data turi būti YYYY-MM-DD formatu."})
             with sqlite3.connect(DB_PATH) as db:
                 rows = db.execute(
-                    "SELECT id, date, text, category, time, done FROM tasks WHERE date=? ORDER BY CASE WHEN time='' THEN 1 ELSE 0 END, time, id",
+                    "SELECT id, date, text, category, time, location, done FROM tasks WHERE date=? ORDER BY CASE WHEN time='' THEN 1 ELSE 0 END, time, id",
                     (day,),
                 ).fetchall()
             return self.send_json(200, {"tasks": [task_dict(row) for row in rows]})
@@ -209,17 +194,11 @@ class PlannerHandler(PlannerMCPMixin, SimpleHTTPRequestHandler):
         if parsed.path == "/api/weights":
             if not self.require_auth():
                 return
-            payload = self.read_json()
-            if not isinstance(payload, dict):
-                return self.send_json(400, {"error": "Netinkami duomenys."})
-            entry_date = str(payload.get("date", ""))
-            try:
-                date.fromisoformat(entry_date)
-                weight = float(payload.get("weight"))
-                if not 1 <= weight <= 500:
-                    raise ValueError
-            except (TypeError, ValueError):
-                return self.send_json(400, {"error": "Nurodykite tinkamą datą ir svorį (1–500 kg)."})
+            request = self.validate_json(WeightRequest, "Nurodykite tinkamą datą ir svorį (1–500 kg).")
+            if request is None:
+                return
+            entry_date = request.date.isoformat()
+            weight = request.weight
             with sqlite3.connect(DB_PATH) as db:
                 db.execute(
                     "INSERT INTO weights(date, weight) VALUES(?, ?) "
@@ -230,17 +209,11 @@ class PlannerHandler(PlannerMCPMixin, SimpleHTTPRequestHandler):
         if parsed.path == "/api/steps":
             if not self.require_auth():
                 return
-            payload = self.read_json()
-            if not isinstance(payload, dict):
-                return self.send_json(400, {"error": "Netinkami duomenys."})
-            entry_date = str(payload.get("date", ""))
-            steps = payload.get("count")
-            try:
-                date.fromisoformat(entry_date)
-                if isinstance(steps, bool) or not isinstance(steps, int) or not 0 <= steps <= 200_000:
-                    raise ValueError
-            except ValueError:
-                return self.send_json(400, {"error": "Nurodykite tinkamą datą ir žingsnių skaičių (0–200 000)."})
+            request = self.validate_json(StepsRequest, "Nurodykite tinkamą datą ir žingsnių skaičių (0–200 000).")
+            if request is None:
+                return
+            entry_date = request.date.isoformat()
+            steps = request.count
             with sqlite3.connect(DB_PATH) as db:
                 db.execute(
                     "INSERT INTO steps(date, count) VALUES(?, ?) "
@@ -251,19 +224,11 @@ class PlannerHandler(PlannerMCPMixin, SimpleHTTPRequestHandler):
         if parsed.path == "/api/vitals":
             if not self.require_auth():
                 return
-            payload = self.read_json()
-            if not isinstance(payload, dict):
-                return self.send_json(400, {"error": "Netinkami duomenys."})
-            entry_date = str(payload.get("date", ""))
-            pulse, systolic, diastolic = payload.get("pulse"), payload.get("systolic"), payload.get("diastolic")
-            try:
-                date.fromisoformat(entry_date)
-                if any(isinstance(value, bool) or not isinstance(value, int) for value in (pulse, systolic, diastolic)):
-                    raise ValueError
-                if not 20 <= pulse <= 250 or not 40 <= systolic <= 300 or not 20 <= diastolic <= 200 or systolic <= diastolic:
-                    raise ValueError
-            except ValueError:
-                return self.send_json(400, {"error": "Patikrinkite datą, pulsą ir kraujospūdžio rodmenis."})
+            request = self.validate_json(VitalsRequest, "Patikrinkite datą, pulsą ir kraujospūdžio rodmenis.")
+            if request is None:
+                return
+            entry_date = request.date.isoformat()
+            pulse, systolic, diastolic = request.pulse, request.systolic, request.diastolic
             with sqlite3.connect(DB_PATH) as db:
                 db.execute(
                     "INSERT INTO vitals(date, pulse, systolic, diastolic) VALUES(?, ?, ?, ?) "
@@ -275,8 +240,10 @@ class PlannerHandler(PlannerMCPMixin, SimpleHTTPRequestHandler):
                 "date": entry_date, "pulse": pulse, "systolic": systolic, "diastolic": diastolic
             }})
         if parsed.path == "/api/login":
-            payload = self.read_json()
-            password = payload.get("password", "") if isinstance(payload, dict) else ""
+            request = self.validate_json(LoginRequest, "Nurodykite slaptažodį.")
+            if request is None:
+                return
+            password = request.password
             if not PLANNER_PASSWORD:
                 return self.send_json(503, {"error": "Nustatykite PLANNER_PASSWORD serverio aplinkoje."})
             client = self.client_address[0]
@@ -306,28 +273,18 @@ class PlannerHandler(PlannerMCPMixin, SimpleHTTPRequestHandler):
         if parsed.path == "/api/tasks":
             if not self.require_auth():
                 return
-            payload = self.read_json()
-            if not isinstance(payload, dict):
-                return self.send_json(400, {"error": "Netinkami duomenys."})
-            task_date = str(payload.get("date", ""))
-            text = str(payload.get("text", "")).strip()
-            category = str(payload.get("category", "Kita"))
-            task_time = str(payload.get("time", ""))
-            try:
-                date.fromisoformat(task_date)
-                if task_time:
-                    time.fromisoformat(task_time)
-            except ValueError:
-                return self.send_json(400, {"error": "Neteisinga data arba laikas."})
-            if not text or len(text) > 120 or category not in CATEGORIES:
-                return self.send_json(400, {"error": "Patikrinkite užduoties pavadinimą ir kategoriją."})
+            request = self.validate_json(TaskCreateRequest, "Patikrinkite užduoties tekstą, datą, kategoriją, laiką ir vietą.")
+            if request is None:
+                return
+            task_date = request.date.isoformat()
+            text, category, task_time, location = request.text, request.category, request.time, request.location
             with sqlite3.connect(DB_PATH) as db:
                 cursor = db.execute(
-                    "INSERT INTO tasks(date,text,category,time) VALUES(?,?,?,?)",
-                    (task_date, text, category, task_time),
+                    "INSERT INTO tasks(date,text,category,time,location) VALUES(?,?,?,?,?)",
+                    (task_date, text, category, task_time, location),
                 )
                 row = db.execute(
-                    "SELECT id, date, text, category, time, done FROM tasks WHERE id=?",
+                    "SELECT id, date, text, category, time, location, done FROM tasks WHERE id=?",
                     (cursor.lastrowid,),
                 ).fetchone()
             return self.send_json(201, {"task": task_dict(row)})
@@ -342,15 +299,15 @@ class PlannerHandler(PlannerMCPMixin, SimpleHTTPRequestHandler):
             task_id = int(self.path.rsplit("/", 1)[1])
         except ValueError:
             return self.send_json(400, {"error": "Neteisingas užduoties numeris."})
-        payload = self.read_json()
-        if not isinstance(payload, dict) or not isinstance(payload.get("done"), bool):
-            return self.send_json(400, {"error": "Reikia nurodyti done true arba false."})
+        request = self.validate_json(TaskDoneRequest, "Reikia nurodyti done true arba false.")
+        if request is None:
+            return
         with sqlite3.connect(DB_PATH) as db:
-            result = db.execute("UPDATE tasks SET done=? WHERE id=?", (int(payload["done"]), task_id))
+            result = db.execute("UPDATE tasks SET done=? WHERE id=?", (int(request.done), task_id))
             if not result.rowcount:
                 return self.send_json(404, {"error": "Užduotis nerasta."})
             row = db.execute(
-                "SELECT id, date, text, category, time, done FROM tasks WHERE id=?", (task_id,)
+                "SELECT id, date, text, category, time, location, done FROM tasks WHERE id=?", (task_id,)
             ).fetchone()
         return self.send_json(200, {"task": task_dict(row)})
 

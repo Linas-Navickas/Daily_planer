@@ -36,6 +36,24 @@ function Read-MaskedPassword {
     }
 }
 
+function Get-AppLogicSignature {
+    $files = @(
+        (Join-Path $PSScriptRoot "main.py"),
+        (Join-Path $PSScriptRoot "schemas.py")
+    )
+    $migrationPath = Join-Path $PSScriptRoot "migrations\versions"
+    if (Test-Path -LiteralPath $migrationPath) {
+        $files += Get-ChildItem -LiteralPath $migrationPath -Filter "*.py" -File -Recurse | Select-Object -ExpandProperty FullName
+    }
+    $parts = foreach ($file in $files | Sort-Object -Unique) {
+        if (Test-Path -LiteralPath $file) {
+            try { "${file}:$((Get-FileHash -LiteralPath $file -Algorithm SHA256).Hash)" }
+            catch { return $null }
+        }
+    }
+    return $parts -join "`n"
+}
+
 $securePassword = Read-MaskedPassword "Sugalvokite planuoklio slaptažodį (bent 12 simbolių): "
 $passwordPtr = [Runtime.InteropServices.Marshal]::SecureStringToBSTR($securePassword)
 
@@ -48,7 +66,9 @@ try {
     $env:PLANNER_PASSWORD = $password
     $env:PORT = "8000"
     $env:HOST = "127.0.0.1"
+    $env:DEV_AUTO_RELOAD = "1"
     $serverPath = Join-Path $PSScriptRoot "main.py"
+    $sourceSignature = Get-AppLogicSignature
     $serverProcess = Start-Process -FilePath "python" `
         -ArgumentList @("-u", "`"$serverPath`"") `
         -WorkingDirectory $PSScriptRoot `
@@ -140,6 +160,38 @@ try {
     }
 
     while (-not $tunnelProcess.HasExited) {
+        $observedSignature = Get-AppLogicSignature
+        if ($observedSignature -and $observedSignature -ne $sourceSignature) {
+            Start-Sleep -Milliseconds 700
+            $stableSignature = Get-AppLogicSignature
+            if ($stableSignature -and $stableSignature -ne $sourceSignature) {
+                Write-Host "Aptiktas programos logikos pakeitimas. Iš naujo paleidžiamas vietinis serveris..."
+                if ($serverProcess -and -not $serverProcess.HasExited) {
+                    Stop-Process -Id $serverProcess.Id -Force
+                    Start-Sleep -Milliseconds 300
+                }
+                $serverProcess = Start-Process -FilePath "python" `
+                    -ArgumentList @("-u", "`"$serverPath`"") `
+                    -WorkingDirectory $PSScriptRoot `
+                    -PassThru `
+                    -WindowStyle Hidden
+                $ready = $false
+                for ($attempt = 0; $attempt -lt 30; $attempt++) {
+                    if ($serverProcess.HasExited) { throw "Planuoklio serveris nepasileido po kodo pakeitimo." }
+                    $client = New-Object System.Net.Sockets.TcpClient
+                    try {
+                        $client.Connect("127.0.0.1", 8000)
+                        $ready = $true
+                        break
+                    }
+                    catch { Start-Sleep -Milliseconds 300 }
+                    finally { $client.Dispose() }
+                }
+                if (-not $ready) { throw "Planuoklio serveris neatsiliepė po kodo pakeitimo." }
+                $sourceSignature = $stableSignature
+                Write-Host "Programos serveris perkrautas. Vietinis puslapis atsinaujins automatiškai."
+            }
+        }
         Start-Sleep -Seconds 1
     }
     if ($tunnelProcess.ExitCode -ne 0) {
@@ -160,6 +212,7 @@ finally {
     $env:PLANNER_PASSWORD = $null
     $env:HOST = $null
     $env:PORT = $null
+    $env:DEV_AUTO_RELOAD = $null
     $password = $null
     [Runtime.InteropServices.Marshal]::ZeroFreeBSTR($passwordPtr)
 }

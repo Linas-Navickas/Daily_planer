@@ -47,7 +47,7 @@
     if (!tasks.length) {
       list.innerHTML = '<div class="empty">Kol kas planas tuščias. Pridėkite pirmą užduotį aukščiau.</div>';
     } else {
-      list.innerHTML = tasks.map(t => `<div class="task ${t.done ? 'done' : ''}"><input class="check" type="checkbox" data-id="${t.id}" ${t.done ? 'checked' : ''} aria-label="Pažymėti atlikta"><div class="task-content"><div class="task-name">${esc(t.text)}</div><div class="task-meta">${t.time ? `<span class="task-time">${esc(t.time)}</span>` : ''}<span class="tag">${esc(t.category)}</span></div></div><button class="delete" data-del="${t.id}" aria-label="Ištrinti užduotį">×</button></div>`).join('');
+      list.innerHTML = tasks.map(t => `<div class="task ${t.done ? 'done' : ''}"><input class="check" type="checkbox" data-id="${t.id}" ${t.done ? 'checked' : ''} aria-label="Pažymėti atlikta"><div class="task-content"><div class="task-name">${esc(t.text)}</div><div class="task-meta">${t.time ? `<span class="task-time">${esc(t.time)}</span>` : ''}<span class="tag">${esc(t.category)}</span><span class="task-location"><span aria-hidden="true">📍</span> <span>Vieta: ${t.location ? esc(t.location) : '—'}</span></span></div></div><button class="delete" data-del="${t.id}" aria-label="Ištrinti užduotį">×</button></div>`).join('');
     }
     const done = tasks.filter(t => t.done).length;
     const pct = tasks.length ? Math.round(done / tasks.length * 100) : 0;
@@ -253,9 +253,11 @@
       await api('/api/tasks', { method: 'POST', body: JSON.stringify({
         date: key(shown), text, category: document.querySelector('#category').value,
         time: document.querySelector('#task-time').value,
+        location: document.querySelector('#task-location').value,
       }) });
       input.value = '';
       document.querySelector('#task-time').value = '';
+      document.querySelector('#task-location').value = '';
       await loadTasks();
       input.focus();
     } catch (error) { window.alert(error.message); }

@@ -341,12 +341,13 @@ class PlannerMCPMixin:
             },
             {
                 "name": "add_task", "title": "Pridėti planuoklio užduotį",
-                "description": "Add a task to the daily planner. Use for tasks and reminders, not for weight, steps, pulse, or blood pressure. If date or task text is unclear, ask first. Read the saved result back to the user.",
+                "description": "Pridėk užduotį planuoklyje. Jei vartotojas nurodo vietą, įrašyk ją location lauke. Jei trūksta datos ar užduoties teksto, paklausk. Po įrašymo perskaityk išsaugotus duomenis.",
                 "inputSchema": {"type": "object", "properties": {
                     "date": {"type": "string", "format": "date", "description": "Data YYYY-MM-DD"},
                     "text": {"type": "string", "minLength": 1, "maxLength": 120},
                     "category": {"type": "string", "enum": sorted(CATEGORIES)},
                     "time": {"type": "string", "description": "Optional time HH:MM"},
+                    "location": {"type": "string", "maxLength": 200, "description": "Optional task location"},
                 }, "required": ["date", "text"], "additionalProperties": False},
                 "annotations": {"readOnlyHint": False, "destructiveHint": False, "idempotentHint": False, "openWorldHint": False},
                 "securitySchemes": write_auth,
@@ -362,13 +363,14 @@ class PlannerMCPMixin:
             },
             {
                 "name": "update_task", "title": "Redaguoti planuoklio užduotį",
-                "description": "Redaguoja užduotį pagal jos ID. Pirmiausia peržiūrėk dienos planą. Pakeisk tik pateiktus laukus: tekstą, datą, kategoriją arba laiką. Jei neaišku, kurią užduotį ar reikšmę keisti, paklausk vartotojo.",
+                "description": "Redaguoja užduotį pagal jos ID. Pirmiausia peržiūrėk dienos planą. Pakeisk tik pateiktus laukus: tekstą, datą, kategoriją, laiką arba vietą. location gali būti tuščias, jei vartotojas nori išvalyti vietą.",
                 "inputSchema": {"type": "object", "properties": {
                     "task_id": {"type": "integer", "minimum": 1},
                     "date": {"type": "string", "format": "date"},
                     "text": {"type": "string", "minLength": 1, "maxLength": 120},
                     "category": {"type": "string", "enum": sorted(CATEGORIES)},
                     "time": {"type": "string", "description": "HH:MM arba tuščia eilutė"},
+                    "location": {"type": "string", "maxLength": 200},
                 }, "required": ["task_id"], "additionalProperties": False},
                 "annotations": {"readOnlyHint": False, "destructiveHint": False, "idempotentHint": True, "openWorldHint": False},
                 "securitySchemes": write_auth,
@@ -452,7 +454,7 @@ class PlannerMCPMixin:
             self.mcp_json(200, {"jsonrpc": "2.0", "id": request_id, "result": {
                 "protocolVersion": requested,
                 "capabilities": {"tools": {"listChanged": False}},
-                "serverInfo": {"name": "daily-planner", "title": "Mano dienos planuoklis", "version": "1.1.0"},
+                "serverInfo": {"name": "daily-planner", "title": "Mano dienos planuoklis", "version": "1.2.0"},
                 "instructions": self.mcp_instructions(),
             }})
             return True
@@ -509,14 +511,14 @@ class PlannerMCPMixin:
         with self.mcp_db() as db:
             if name in ("get_day_summary", "list_tasks"):
                 tasks = db.execute(
-                    "SELECT id, text, category, time, done FROM tasks WHERE date=? ORDER BY CASE WHEN time='' THEN 1 ELSE 0 END, time, id",
+                    "SELECT id, text, category, time, location, done FROM tasks WHERE date=? ORDER BY CASE WHEN time='' THEN 1 ELSE 0 END, time, id",
                     (entry_date,),
                 ).fetchall()
                 weight = db.execute("SELECT weight FROM weights WHERE date=?", (entry_date,)).fetchone()
                 steps = db.execute("SELECT count FROM steps WHERE date=?", (entry_date,)).fetchone()
                 vitals = db.execute("SELECT pulse,systolic,diastolic FROM vitals WHERE date=?", (entry_date,)).fetchone()
                 summary = {"date": entry_date, "tasks": [
-                    {"id": row[0], "text": row[1], "category": row[2], "time": row[3], "done": bool(row[4])}
+                    {"id": row[0], "text": row[1], "category": row[2], "time": row[3], "location": row[4], "done": bool(row[5])}
                     for row in tasks
                 ]}
                 if name == "list_tasks":
@@ -530,25 +532,29 @@ class PlannerMCPMixin:
                 text = str(args.get("text", "")).strip()
                 category = str(args.get("category", "Kita"))
                 task_time = str(args.get("time", ""))
+                location = args.get("location", "")
                 if not text or len(text) > 120 or category not in CATEGORIES:
                     raise ValueError("Patikrink užduoties tekstą ir kategoriją.")
+                if not isinstance(location, str) or len(location.strip()) > 200:
+                    raise ValueError("Vieta turi būti ne ilgesnė nei 200 simbolių.")
+                location = location.strip()
                 try:
                     if task_time:
                         time.fromisoformat(task_time)
                 except ValueError:
                     raise ValueError("Laiką nurodyk formatu HH:MM.")
                 cursor = db.execute(
-                    "INSERT INTO tasks(date,text,category,time) VALUES(?,?,?,?)",
-                    (entry_date, text, category, task_time),
+                    "INSERT INTO tasks(date,text,category,time,location) VALUES(?,?,?,?,?)",
+                    (entry_date, text, category, task_time, location),
                 )
-                return {"saved": True, "type": "task", "id": cursor.lastrowid, "date": entry_date, "text": text, "category": category, "time": task_time}
+                return {"saved": True, "type": "task", "id": cursor.lastrowid, "date": entry_date, "text": text, "category": category, "time": task_time, "location": location}
 
             if name in ("mark_task_done", "update_task", "delete_task"):
                 task_id = args.get("task_id")
                 if isinstance(task_id, bool) or not isinstance(task_id, int) or task_id < 1:
                     raise ValueError("Nurodyk galiojantį užduoties numerį.")
                 row = db.execute(
-                    "SELECT id, date, text, category, time, done FROM tasks WHERE id=?", (task_id,)
+                    "SELECT id, date, text, category, time, location, done FROM tasks WHERE id=?", (task_id,)
                 ).fetchone()
                 if not row:
                     raise ValueError("Tokios užduoties planuoklyje nėra.")
@@ -592,6 +598,11 @@ class PlannerMCPMixin:
                         except ValueError:
                             raise ValueError("Laiką nurodyk formatu HH:MM.")
                         updates["time"] = task_time
+                    if "location" in args:
+                        location = args["location"]
+                        if not isinstance(location, str) or len(location.strip()) > 200:
+                            raise ValueError("Vieta turi būti ne ilgesnė nei 200 simbolių.")
+                        updates["location"] = location.strip()
                     if not updates:
                         raise ValueError("Pateik bent vieną lauką, kurį reikia pakeisti.")
                     assignments = ", ".join(f"{column}=?" for column in updates)
@@ -600,11 +611,11 @@ class PlannerMCPMixin:
                         (*updates.values(), task_id),
                     )
                 updated = db.execute(
-                    "SELECT id, date, text, category, time, done FROM tasks WHERE id=?", (task_id,)
+                    "SELECT id, date, text, category, time, location, done FROM tasks WHERE id=?", (task_id,)
                 ).fetchone()
                 return {"updated": True, "task": {
                     "id": updated[0], "date": updated[1], "text": updated[2],
-                    "category": updated[3], "time": updated[4], "done": bool(updated[5]),
+                    "category": updated[3], "time": updated[4], "location": updated[5], "done": bool(updated[6]),
                 }}
 
             if name == "record_weight":
