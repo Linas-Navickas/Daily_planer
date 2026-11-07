@@ -10,8 +10,8 @@ import hmac
 import json
 import math
 import secrets
-import sqlite3
 import time as clock
+from database import DatabaseError, connect as db_connection
 
 
 READ_SCOPE = "planner:read"
@@ -73,12 +73,8 @@ class PlannerMCPMixin:
 
     @contextmanager
     def mcp_db(self):
-        db = sqlite3.connect(self.DB_PATH)
-        try:
-            with db:
-                yield db
-        finally:
-            db.close()
+        with db_connection() as db:
+            yield db
 
     def mcp_metadata(self, path):
         if self.mcp_tunnel_mode():
@@ -161,7 +157,7 @@ class PlannerMCPMixin:
             with self.mcp_db() as db:
                 row = db.execute("SELECT redirect_uris FROM oauth_clients WHERE client_id=?", (fields["client_id"],)).fetchone()
             return bool(row and fields["redirect_uri"] in json.loads(row[0]))
-        except (ValueError, TypeError, sqlite3.Error):
+        except (ValueError, TypeError, DatabaseError):
             return False
 
     def handle_mcp_post(self, parsed):
@@ -201,7 +197,7 @@ class PlannerMCPMixin:
                 "response_types": ["code"],
                 "token_endpoint_auth_method": "none",
             })
-        except (ValueError, TypeError, json.JSONDecodeError, sqlite3.Error):
+        except (ValueError, TypeError, json.JSONDecodeError, DatabaseError):
             self.mcp_json(400, {"error": "invalid_client_metadata", "error_description": "Neteisingi OAuth kliento duomenys."})
         return True
 
@@ -249,7 +245,7 @@ class PlannerMCPMixin:
             self.send_header("Cache-Control", "no-store")
             self.send_header("Content-Length", "0")
             self.end_headers()
-        except (ValueError, sqlite3.Error) as error:
+        except (ValueError, DatabaseError) as error:
             self.mcp_html(400, "<!doctype html><meta charset=utf-8><title>Prijungti planuoklį</title><h1>Prisijungti nepavyko</h1><p>" + escape(str(error)) + "</p><p>Grįžkite į ChatGPT ir bandykite dar kartą.</p>")
         return True
 
@@ -289,7 +285,7 @@ class PlannerMCPMixin:
                 "expires_in": TOKEN_TTL,
                 "scope": row[4],
             })
-        except (ValueError, sqlite3.Error) as error:
+        except (ValueError, DatabaseError) as error:
             code = str(error) or "invalid_grant"
             self.mcp_json(400, {"error": code})
         return True
@@ -311,7 +307,7 @@ class PlannerMCPMixin:
             if required_scope and required_scope not in scopes:
                 return {"missing_scope": required_scope}
             return {"scopes": scopes}
-        except sqlite3.Error:
+        except DatabaseError:
             return None
 
     def mcp_auth_error(self, request_id, message, required_scope=None):

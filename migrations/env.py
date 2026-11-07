@@ -1,8 +1,10 @@
 from alembic import context
 from sqlalchemy import engine_from_config, pool
+from database import sqlalchemy_url_string
 
 
 config = context.config
+config.set_main_option("sqlalchemy.url", sqlalchemy_url_string().replace("%", "%%"))
 target_metadata = None
 
 

@@ -1,5 +1,6 @@
-"""Create the planner's initial SQLite schema."""
+"""Create the initial PostgreSQL planner schema."""
 
+import sqlalchemy as sa
 from alembic import op
 
 
@@ -10,64 +11,70 @@ depends_on = None
 
 
 def upgrade():
-    # IF NOT EXISTS preserves databases created by the previous startup initializer.
-    op.execute("""CREATE TABLE IF NOT EXISTS tasks (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        date TEXT NOT NULL,
-        text TEXT NOT NULL,
-        category TEXT NOT NULL,
-        time TEXT NOT NULL DEFAULT '',
-        done INTEGER NOT NULL DEFAULT 0,
-        created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
-    )""")
-    op.execute("CREATE INDEX IF NOT EXISTS tasks_by_date ON tasks(date, id)")
-    op.execute("""CREATE TABLE IF NOT EXISTS weights (
-        date TEXT PRIMARY KEY,
-        weight REAL NOT NULL,
-        created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
-    )""")
-    op.execute("""CREATE TABLE IF NOT EXISTS steps (
-        date TEXT PRIMARY KEY,
-        count INTEGER NOT NULL,
-        created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
-    )""")
-    op.execute("""CREATE TABLE IF NOT EXISTS vitals (
-        date TEXT PRIMARY KEY,
-        pulse INTEGER NOT NULL,
-        systolic INTEGER NOT NULL,
-        diastolic INTEGER NOT NULL,
-        created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
-    )""")
-    op.execute("""CREATE TABLE IF NOT EXISTS oauth_clients (
-        client_id TEXT PRIMARY KEY,
-        client_name TEXT NOT NULL,
-        redirect_uris TEXT NOT NULL,
-        created_at REAL NOT NULL
-    )""")
-    op.execute("""CREATE TABLE IF NOT EXISTS oauth_codes (
-        code_hash TEXT PRIMARY KEY,
-        client_id TEXT NOT NULL,
-        redirect_uri TEXT NOT NULL,
-        code_challenge TEXT NOT NULL,
-        resource TEXT NOT NULL,
-        scopes TEXT NOT NULL,
-        expires_at REAL NOT NULL
-    )""")
-    op.execute("""CREATE TABLE IF NOT EXISTS oauth_tokens (
-        token_hash TEXT PRIMARY KEY,
-        client_id TEXT NOT NULL,
-        resource TEXT NOT NULL,
-        scopes TEXT NOT NULL,
-        expires_at REAL NOT NULL
-    )""")
+    op.create_table(
+        "tasks",
+        sa.Column("id", sa.Integer(), primary_key=True, autoincrement=True),
+        sa.Column("date", sa.Text(), nullable=False),
+        sa.Column("text", sa.Text(), nullable=False),
+        sa.Column("category", sa.Text(), nullable=False),
+        sa.Column("time", sa.Text(), nullable=False, server_default=""),
+        sa.Column("done", sa.Integer(), nullable=False, server_default="0"),
+        sa.Column("created_at", sa.DateTime(timezone=True), nullable=False, server_default=sa.func.now()),
+    )
+    op.create_index("tasks_by_date", "tasks", ["date", "id"])
+    op.create_table(
+        "weights",
+        sa.Column("date", sa.Text(), primary_key=True),
+        sa.Column("weight", sa.Float(), nullable=False),
+        sa.Column("created_at", sa.DateTime(timezone=True), nullable=False, server_default=sa.func.now()),
+    )
+    op.create_table(
+        "steps",
+        sa.Column("date", sa.Text(), primary_key=True),
+        sa.Column("count", sa.Integer(), nullable=False),
+        sa.Column("created_at", sa.DateTime(timezone=True), nullable=False, server_default=sa.func.now()),
+    )
+    op.create_table(
+        "vitals",
+        sa.Column("date", sa.Text(), primary_key=True),
+        sa.Column("pulse", sa.Integer(), nullable=False),
+        sa.Column("systolic", sa.Integer(), nullable=False),
+        sa.Column("diastolic", sa.Integer(), nullable=False),
+        sa.Column("created_at", sa.DateTime(timezone=True), nullable=False, server_default=sa.func.now()),
+    )
+    op.create_table(
+        "oauth_clients",
+        sa.Column("client_id", sa.Text(), primary_key=True),
+        sa.Column("client_name", sa.Text(), nullable=False),
+        sa.Column("redirect_uris", sa.Text(), nullable=False),
+        sa.Column("created_at", sa.Float(), nullable=False),
+    )
+    op.create_table(
+        "oauth_codes",
+        sa.Column("code_hash", sa.Text(), primary_key=True),
+        sa.Column("client_id", sa.Text(), nullable=False),
+        sa.Column("redirect_uri", sa.Text(), nullable=False),
+        sa.Column("code_challenge", sa.Text(), nullable=False),
+        sa.Column("resource", sa.Text(), nullable=False),
+        sa.Column("scopes", sa.Text(), nullable=False),
+        sa.Column("expires_at", sa.Float(), nullable=False),
+    )
+    op.create_table(
+        "oauth_tokens",
+        sa.Column("token_hash", sa.Text(), primary_key=True),
+        sa.Column("client_id", sa.Text(), nullable=False),
+        sa.Column("resource", sa.Text(), nullable=False),
+        sa.Column("scopes", sa.Text(), nullable=False),
+        sa.Column("expires_at", sa.Float(), nullable=False),
+    )
 
 
 def downgrade():
-    op.execute("DROP TABLE IF EXISTS oauth_tokens")
-    op.execute("DROP TABLE IF EXISTS oauth_codes")
-    op.execute("DROP TABLE IF EXISTS oauth_clients")
-    op.execute("DROP TABLE IF EXISTS vitals")
-    op.execute("DROP TABLE IF EXISTS steps")
-    op.execute("DROP TABLE IF EXISTS weights")
-    op.execute("DROP INDEX IF EXISTS tasks_by_date")
-    op.execute("DROP TABLE IF EXISTS tasks")
+    op.drop_table("oauth_tokens")
+    op.drop_table("oauth_codes")
+    op.drop_table("oauth_clients")
+    op.drop_table("vitals")
+    op.drop_table("steps")
+    op.drop_table("weights")
+    op.drop_index("tasks_by_date", table_name="tasks")
+    op.drop_table("tasks")

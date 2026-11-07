@@ -1,45 +1,17 @@
 ﻿$ErrorActionPreference = "Stop"
-$serverProcess = $null
 $tunnelProcess = $null
 $password = $null
 $tunnelStdout = $null
 $tunnelStderr = $null
 
-function Read-MaskedPassword {
-    param([string]$Prompt)
-    Write-Host -NoNewline $Prompt
-    $value = New-Object System.Security.SecureString
-    while ($true) {
-        try {
-            $key = [Console]::ReadKey($true)
-        }
-        catch [System.InvalidOperationException] {
-            Write-Host "`nŠis terminalas nepalaiko slapto įvedimo taškeliais. Įveskite slaptažodį į saugų įvedimo lauką."
-            return Read-Host -Prompt $Prompt -AsSecureString
-        }
-        if ($key.Key -eq [ConsoleKey]::Enter) {
-            [Console]::WriteLine()
-            $value.MakeReadOnly()
-            return $value
-        }
-        if ($key.Key -eq [ConsoleKey]::Backspace) {
-            if ($value.Length -gt 0) {
-                $value.RemoveAt($value.Length - 1)
-                [Console]::Write("`b `b")
-            }
-            continue
-        }
-        if (-not [char]::IsControl($key.KeyChar)) {
-            $value.AppendChar($key.KeyChar)
-            [Console]::Write(".")
-        }
-    }
-}
-
 function Get-AppLogicSignature {
     $files = @(
         (Join-Path $PSScriptRoot "main.py"),
-        (Join-Path $PSScriptRoot "schemas.py")
+        (Join-Path $PSScriptRoot "schemas.py"),
+        (Join-Path $PSScriptRoot "mcp_server.py"),
+        (Join-Path $PSScriptRoot "database.py"),
+        (Join-Path $PSScriptRoot "index.html"),
+        (Join-Path $PSScriptRoot "app.js")
     )
     $migrationPath = Join-Path $PSScriptRoot "migrations\versions"
     if (Test-Path -LiteralPath $migrationPath) {
@@ -54,43 +26,36 @@ function Get-AppLogicSignature {
     return $parts -join "`n"
 }
 
-$securePassword = Read-MaskedPassword "Sugalvokite planuoklio slaptažodį (bent 12 simbolių): "
-$passwordPtr = [Runtime.InteropServices.Marshal]::SecureStringToBSTR($securePassword)
-
 try {
-    $password = [Runtime.InteropServices.Marshal]::PtrToStringBSTR($passwordPtr)
+    $dockerCommand = Get-Command docker -ErrorAction SilentlyContinue
+    if (-not $dockerCommand) { throw "Docker nerastas. Įdiekite ir paleiskite Docker Desktop." }
+
+    $composeConfigJson = & $dockerCommand.Source compose --project-directory $PSScriptRoot config --format json 2>$null
+    if ($LASTEXITCODE -ne 0) { throw "Nepavyko nuskaityti Docker Compose nustatymų. Patikrinkite .env failą." }
+    try { $composeConfig = ($composeConfigJson -join [Environment]::NewLine) | ConvertFrom-Json }
+    catch { throw "Docker Compose nustatymų nuskaityti nepavyko. Patikrinkite .env failą." }
+    $password = [string]$composeConfig.services.app.environment.PLANNER_PASSWORD
     if ([string]::IsNullOrWhiteSpace($password) -or $password.Length -lt 12) {
-        throw "Naudokite bent 12 simbolių slaptažodį."
+        throw "Įrašykite bent 12 simbolių PLANNER_PASSWORD reikšmę į .env failą."
     }
 
     $env:PLANNER_PASSWORD = $password
-    $env:PORT = "8000"
-    $env:HOST = "127.0.0.1"
-    $env:DEV_AUTO_RELOAD = "1"
-    $serverPath = Join-Path $PSScriptRoot "main.py"
     $sourceSignature = Get-AppLogicSignature
-    $serverProcess = Start-Process -FilePath "python" `
-        -ArgumentList @("-u", "`"$serverPath`"") `
-        -WorkingDirectory $PSScriptRoot `
-        -PassThru `
-        -WindowStyle Hidden
+    & $dockerCommand.Source compose --project-directory $PSScriptRoot up -d --build db app mcp
+    if ($LASTEXITCODE -ne 0) { throw "Docker Compose nepaleido db, app ir mcp konteinerių. Patikrinkite .env nustatymus." }
 
     $ready = $false
     for ($attempt = 0; $attempt -lt 30; $attempt++) {
-        if ($serverProcess.HasExited) {
-            throw "Planuoklio serveris nepasileido. Patikrinkite, ar įdiegtas Python ir ar prievadas 8000 laisvas."
-        }
-        $client = New-Object System.Net.Sockets.TcpClient
         try {
-            $client.Connect("127.0.0.1", 8000)
+            $null = Invoke-RestMethod -Uri "http://127.0.0.1:8000/healthz" -TimeoutSec 2
             $ready = $true
             break
         }
-        catch { Start-Sleep -Milliseconds 300 }
-        finally { $client.Dispose() }
+        catch { Start-Sleep -Seconds 1 }
     }
     if (-not $ready) {
-        throw "Planuoklio serveris neatsiliepė per 9 sekundes."
+        & $dockerCommand.Source compose --project-directory $PSScriptRoot logs --tail 40 app db
+        throw "Planuoklio konteineris neatsiliepė. Patikrinkite Docker Compose žurnalą."
     }
 
     $cloudflaredPath = Join-Path $PSScriptRoot ".tools\cloudflared.exe"
@@ -165,31 +130,21 @@ try {
             Start-Sleep -Milliseconds 700
             $stableSignature = Get-AppLogicSignature
             if ($stableSignature -and $stableSignature -ne $sourceSignature) {
-                Write-Host "Aptiktas programos logikos pakeitimas. Iš naujo paleidžiamas vietinis serveris..."
-                if ($serverProcess -and -not $serverProcess.HasExited) {
-                    Stop-Process -Id $serverProcess.Id -Force
-                    Start-Sleep -Milliseconds 300
-                }
-                $serverProcess = Start-Process -FilePath "python" `
-                    -ArgumentList @("-u", "`"$serverPath`"") `
-                    -WorkingDirectory $PSScriptRoot `
-                    -PassThru `
-                    -WindowStyle Hidden
+                Write-Host "Aptiktas programos pakeitimas. Perkuriamas app konteineris..."
+                & $dockerCommand.Source compose --project-directory $PSScriptRoot up -d --build app
+                if ($LASTEXITCODE -ne 0) { throw "Nepavyko atnaujinti app konteinerio." }
                 $ready = $false
-                for ($attempt = 0; $attempt -lt 30; $attempt++) {
-                    if ($serverProcess.HasExited) { throw "Planuoklio serveris nepasileido po kodo pakeitimo." }
-                    $client = New-Object System.Net.Sockets.TcpClient
+                for ($attempt = 0; $attempt -lt 60; $attempt++) {
                     try {
-                        $client.Connect("127.0.0.1", 8000)
+                        $null = Invoke-RestMethod -Uri "http://127.0.0.1:8000/healthz" -TimeoutSec 2
                         $ready = $true
                         break
                     }
-                    catch { Start-Sleep -Milliseconds 300 }
-                    finally { $client.Dispose() }
+                    catch { Start-Sleep -Seconds 1 }
                 }
                 if (-not $ready) { throw "Planuoklio serveris neatsiliepė po kodo pakeitimo." }
                 $sourceSignature = $stableSignature
-                Write-Host "Programos serveris perkrautas. Vietinis puslapis atsinaujins automatiškai."
+                Write-Host "App konteineris atnaujintas. Vietinis puslapis atsinaujins automatiškai. MCP konteineriui atnaujinti vykdykite: docker compose up -d --build mcp"
             }
         }
         Start-Sleep -Seconds 1
@@ -203,8 +158,8 @@ finally {
     if ($tunnelProcess -and -not $tunnelProcess.HasExited) {
         Stop-Process -Id $tunnelProcess.Id -Force
     }
-    if ($serverProcess -and -not $serverProcess.HasExited) {
-        Stop-Process -Id $serverProcess.Id -Force
+    if ($dockerCommand) {
+        & $dockerCommand.Source compose --project-directory $PSScriptRoot stop app | Out-Null
     }
     foreach ($logPath in @($tunnelStdout, $tunnelStderr)) {
         if ($logPath -and (Test-Path $logPath)) { Remove-Item $logPath -Force }
@@ -214,5 +169,4 @@ finally {
     $env:PORT = $null
     $env:DEV_AUTO_RELOAD = $null
     $password = $null
-    [Runtime.InteropServices.Marshal]::ZeroFreeBSTR($passwordPtr)
 }

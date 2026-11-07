@@ -1,5 +1,4 @@
 ﻿$ErrorActionPreference = "Stop"
-$serverProcess = $null
 $apiKeyPtr = [IntPtr]::Zero
 $secureApiKey = $null
 $apiKey = $null
@@ -21,6 +20,12 @@ function Save-ApiKey {
     }
     $lines += "CONTROL_PLANE_API_KEY=$Value"
     [System.IO.File]::WriteAllLines($envFilePath, [string[]]$lines, (New-Object System.Text.UTF8Encoding($false)))
+}
+
+function Has-ComposeSetting {
+    param([Parameter(Mandatory = $true)][string]$Name)
+    if (-not (Test-Path -LiteralPath $envFilePath)) { return $false }
+    return [bool](Get-Content -LiteralPath $envFilePath -Encoding UTF8 | Where-Object { $_ -match "^$([regex]::Escape($Name))=.+$" } | Select-Object -First 1)
 }
 
 function Read-MaskedSecret {
@@ -72,40 +77,33 @@ catch {
 
 try {
     $env:CONTROL_PLANE_API_KEY = $apiKey
-    $env:PLANNER_PASSWORD = "secure-mcp-local-only"
-    $env:DATA_DIR = Join-Path $PSScriptRoot "data"
-    $env:PORT = "8001"
-    $env:HOST = "127.0.0.1"
-    $env:MCP_TUNNEL_MODE = "1"
-
-    $serverPath = Join-Path $PSScriptRoot "main.py"
-    $serverProcess = Start-Process -FilePath "python" -ArgumentList @("-u", "`"$serverPath`"") -WorkingDirectory $PSScriptRoot -PassThru -WindowStyle Hidden
+    if (-not (Has-ComposeSetting "POSTGRES_PASSWORD") -or -not (Has-ComposeSetting "PLANNER_PASSWORD")) {
+        throw "Į .env failą įrašykite POSTGRES_PASSWORD ir PLANNER_PASSWORD reikšmes pagal .env.example, išsaugodami jame CONTROL_PLANE_API_KEY."
+    }
+    $dockerCommand = Get-Command docker -ErrorAction SilentlyContinue
+    if (-not $dockerCommand) { throw "Docker nerastas. Įdiekite ir paleiskite Docker Desktop." }
+    & $dockerCommand.Source compose --project-directory $PSScriptRoot up -d --build db app mcp
+    if ($LASTEXITCODE -ne 0) { throw "Docker Compose nepaleido db, app ir mcp konteinerių. Patikrinkite .env nustatymus." }
     $ready = $false
     for ($attempt = 0; $attempt -lt 30; $attempt++) {
-        if ($serverProcess.HasExited) { throw "Lokaliai apribotas MCP serveris nepasileido." }
-        $client = New-Object System.Net.Sockets.TcpClient
         try {
-            $client.Connect("127.0.0.1", 8001)
+            $null = Invoke-RestMethod -Uri "http://127.0.0.1:8001/healthz" -TimeoutSec 2
             $ready = $true
             break
         }
-        catch { Start-Sleep -Milliseconds 300 }
-        finally { $client.Dispose() }
+        catch { Start-Sleep -Seconds 1 }
     }
-    if (-not $ready) { throw "MCP serveris neatsiliepė per 9 sekundes." }
+    if (-not $ready) {
+        & $dockerCommand.Source compose --project-directory $PSScriptRoot logs --tail 40 mcp db
+        throw "MCP konteineris neatsiliepė. Patikrinkite Docker Compose žurnalą."
+    }
 
-    Write-Host "Pradedamas Secure MCP Tunnel. Jis pasiekiamas tik per jūsų OpenAI tunelį."
+    Write-Host "db, app ir mcp konteineriai paleisti. Pradedamas Secure MCP Tunnel."
     & $tunnelClientPath run --profile "daily-planner"
     if ($LASTEXITCODE -ne 0) { throw "Secure MCP Tunnel sustojo su klaida (kodas $LASTEXITCODE)." }
 }
 finally {
-    if ($serverProcess -and -not $serverProcess.HasExited) { Stop-Process -Id $serverProcess.Id -Force }
     $env:CONTROL_PLANE_API_KEY = $null
-    $env:PLANNER_PASSWORD = $null
-    $env:DATA_DIR = $null
-    $env:PORT = $null
-    $env:HOST = $null
-    $env:MCP_TUNNEL_MODE = $null
     $apiKey = $null
     $secureApiKey = $null
     if ($apiKeyPtr -ne [IntPtr]::Zero) { [Runtime.InteropServices.Marshal]::ZeroFreeBSTR($apiKeyPtr) }

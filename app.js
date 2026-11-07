@@ -8,6 +8,8 @@
   const weightView = document.querySelector('#weight-view');
   const stepsView = document.querySelector('#steps-view');
   const healthView = document.querySelector('#health-view');
+  const allTasksView = document.querySelector('#all-tasks-view');
+  const allTaskList = document.querySelector('#all-task-list');
   const weightList = document.querySelector('#weight-list');
   const stepsList = document.querySelector('#steps-list');
   const healthList = document.querySelector('#health-list');
@@ -64,6 +66,24 @@
       render();
     } catch (error) {
       list.innerHTML = `<div class="empty">${esc(error.message)}</div>`;
+    }
+  }
+
+  async function loadAllTasks() {
+    allTaskList.innerHTML = '<div class="empty">Kraunamos užduotys…</div>';
+    try {
+      const result = await api('/api/tasks/all');
+      if (!result.tasks.length) {
+        allTaskList.innerHTML = '<div class="empty">Planuoklyje užduočių dar nėra.</div>';
+        return;
+      }
+      allTaskList.innerHTML = result.tasks.map(t => {
+        const taskDate = new Intl.DateTimeFormat('lt-LT', { year: 'numeric', month: 'long', day: 'numeric' })
+          .format(new Date(`${t.date}T00:00:00`));
+        return `<div class="task ${t.done ? 'done' : ''}"><input class="check" type="checkbox" data-all-id="${t.id}" ${t.done ? 'checked' : ''} aria-label="Pažymėti atlikta"><div class="task-content"><div class="task-name">${esc(t.text)}</div><div class="task-meta"><span>${esc(taskDate)}</span>${t.time ? `<span class="task-time">${esc(t.time)}</span>` : ''}<span class="tag">${esc(t.category)}</span><span class="task-location"><span aria-hidden="true">📍</span> <span>Vieta: ${t.location ? esc(t.location) : '—'}</span></span></div></div><button class="delete" data-all-del="${t.id}" aria-label="Ištrinti užduotį">×</button></div>`;
+      }).join('');
+    } catch (error) {
+      allTaskList.innerHTML = `<div class="empty">${esc(error.message)}</div>`;
     }
   }
 
@@ -124,23 +144,28 @@
   }
 
   function showView(view) {
+    const showAllTasks = view === 'all-tasks';
     const showWeights = view === 'weight';
     const showSteps = view === 'steps';
     const showHealth = view === 'health';
-    plannerView.hidden = showWeights || showSteps || showHealth;
+    plannerView.hidden = showAllTasks || showWeights || showSteps || showHealth;
+    allTasksView.hidden = !showAllTasks;
     weightView.hidden = !showWeights;
     stepsView.hidden = !showSteps;
     healthView.hidden = !showHealth;
-    document.querySelector('#menu-planner').classList.toggle('active', !showWeights && !showSteps && !showHealth);
+    document.querySelector('#menu-planner').classList.toggle('active', !showAllTasks && !showWeights && !showSteps && !showHealth);
+    document.querySelector('#menu-all-tasks').classList.toggle('active', showAllTasks);
     document.querySelector('#menu-weight').classList.toggle('active', showWeights);
     document.querySelector('#menu-steps').classList.toggle('active', showSteps);
     document.querySelector('#menu-health').classList.toggle('active', showHealth);
+    if (showAllTasks) loadAllTasks();
     if (showWeights) loadWeights();
     if (showSteps) loadSteps();
     if (showHealth) loadHealth();
   }
 
   document.querySelector('#menu-planner').addEventListener('click', () => showView('planner'));
+  document.querySelector('#menu-all-tasks').addEventListener('click', () => showView('all-tasks'));
   document.querySelector('#menu-weight').addEventListener('click', () => showView('weight'));
   document.querySelector('#menu-steps').addEventListener('click', () => showView('steps'));
   document.querySelector('#menu-health').addEventListener('click', () => showView('health'));
@@ -276,6 +301,25 @@
     if (!button) return;
     try {
       await api(`/api/tasks/${button.dataset.del}`, { method: 'DELETE' });
+      await loadTasks();
+    } catch (error) { window.alert(error.message); }
+  });
+
+  allTaskList.addEventListener('change', async event => {
+    if (!event.target.matches('[data-all-id]')) return;
+    try {
+      await api(`/api/tasks/${event.target.dataset.allId}`, { method: 'PATCH', body: JSON.stringify({ done: event.target.checked }) });
+      await loadAllTasks();
+      await loadTasks();
+    } catch (error) { window.alert(error.message); }
+  });
+
+  allTaskList.addEventListener('click', async event => {
+    const button = event.target.closest('[data-all-del]');
+    if (!button) return;
+    try {
+      await api(`/api/tasks/${button.dataset.allDel}`, { method: 'DELETE' });
+      await loadAllTasks();
       await loadTasks();
     } catch (error) { window.alert(error.message); }
   });

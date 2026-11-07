@@ -1,0 +1,14 @@
+.git
+.gitignore
+.env
+.env.*
+data/
+__pycache__/
+*.py[cod]
+.tools/
+.vscode/
+planner-qr.png
+uzduotys.txt
+start_public.ps1
+start_secure_mcp.ps1
+configure_secure_mcp.ps1
