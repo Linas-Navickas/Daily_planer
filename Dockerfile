@@ -13,11 +13,11 @@ COPY requirements.txt ./
 RUN python -m pip install --no-cache-dir --upgrade pip \
     && python -m pip install --no-cache-dir -r requirements.txt
 
-COPY --chown=appuser:appuser main.py mcp_server.py database.py schemas.py index.html app.js alembic.ini ./
-COPY --chown=appuser:appuser migrations ./migrations
+COPY --chown=appuser:appuser alembic.ini ./
+COPY --chown=appuser:appuser planner ./planner
 
 USER appuser
 
 EXPOSE 8000 8001
 
-CMD ["python", "main.py"]
+CMD ["python", "planner/main.py"]

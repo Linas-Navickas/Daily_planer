@@ -6,14 +6,14 @@ $tunnelStderr = $null
 
 function Get-AppLogicSignature {
     $files = @(
-        (Join-Path $PSScriptRoot "main.py"),
-        (Join-Path $PSScriptRoot "schemas.py"),
-        (Join-Path $PSScriptRoot "mcp_server.py"),
-        (Join-Path $PSScriptRoot "database.py"),
-        (Join-Path $PSScriptRoot "index.html"),
-        (Join-Path $PSScriptRoot "app.js")
+        (Join-Path $PSScriptRoot "planner\main.py"),
+        (Join-Path $PSScriptRoot "planner\schemas.py"),
+        (Join-Path $PSScriptRoot "planner\mcp_server.py"),
+        (Join-Path $PSScriptRoot "planner\database.py"),
+        (Join-Path $PSScriptRoot "planner\static\index.html"),
+        (Join-Path $PSScriptRoot "planner\static\app.js")
     )
-    $migrationPath = Join-Path $PSScriptRoot "migrations\versions"
+    $migrationPath = Join-Path $PSScriptRoot "planner\migrations\versions"
     if (Test-Path -LiteralPath $migrationPath) {
         $files += Get-ChildItem -LiteralPath $migrationPath -Filter "*.py" -File -Recurse | Select-Object -ExpandProperty FullName
     }
@@ -98,7 +98,7 @@ try {
     if ($publicUrl) {
         Write-Host "Viešas planuoklio adresas: $publicUrl"
         Write-Host "ChatGPT papildinio pastoviam MCP ryšiui paleiskite start_secure_mcp.ps1; šis Quick Tunnel skirtas planuoklio svetainei."
-        $qrGeneratorPath = Join-Path $PSScriptRoot "generate_qr.py"
+        $qrGeneratorPath = Join-Path $PSScriptRoot "scripts\generate_qr.py"
         & python $qrGeneratorPath $publicUrl $qrPath
         if ($LASTEXITCODE -eq 0) {
             Write-Host "QR kodas atnaujintas: $qrPath"

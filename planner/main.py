@@ -24,7 +24,8 @@ from database import connect as db_connection, sqlalchemy_url_string
 from schemas import LoginRequest, StepsRequest, TaskCreateRequest, TaskDoneRequest, VitalsRequest, WeightRequest
 
 
-ROOT = Path(__file__).resolve().parent
+APP_DIR = Path(__file__).resolve().parent
+ROOT = APP_DIR.parent
 MCP_TUNNEL_MODE = os.environ.get("MCP_TUNNEL_MODE", "") == "1"
 HOST = os.environ.get("HOST", "127.0.0.1" if MCP_TUNNEL_MODE else "0.0.0.0")
 PORT = int(os.environ.get("PORT", "8000"))
@@ -36,8 +37,15 @@ LOGIN_ATTEMPTS = {}
 
 
 def app_source_version():
-    source_files = [ROOT / "main.py", ROOT / "mcp_server.py", ROOT / "database.py", ROOT / "schemas.py", ROOT / "index.html", ROOT / "app.js"]
-    migration_dir = ROOT / "migrations" / "versions"
+    source_files = [
+        APP_DIR / "main.py",
+        APP_DIR / "mcp_server.py",
+        APP_DIR / "database.py",
+        APP_DIR / "schemas.py",
+        APP_DIR / "static" / "index.html",
+        APP_DIR / "static" / "app.js",
+    ]
+    migration_dir = APP_DIR / "migrations" / "versions"
     if migration_dir.exists():
         source_files.extend(sorted(migration_dir.glob("*.py")))
     digest = sha256()
@@ -147,12 +155,12 @@ async def healthcheck():
 @app.get("/", include_in_schema=False)
 @app.get("/index.html", include_in_schema=False)
 async def index():
-    return FileResponse(ROOT / "index.html", media_type="text/html; charset=utf-8")
+    return FileResponse(APP_DIR / "static" / "index.html", media_type="text/html; charset=utf-8")
 
 
 @app.get("/app.js", include_in_schema=False)
 async def javascript():
-    return FileResponse(ROOT / "app.js", media_type="text/javascript; charset=utf-8")
+    return FileResponse(APP_DIR / "static" / "app.js", media_type="text/javascript; charset=utf-8")
 
 
 @app.get("/api/dev-version")

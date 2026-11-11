@@ -1,6 +1,6 @@
 # Planuoklio paleidimas
 
-Planuoklis yra FastAPI programa, kurią aptarnauja Uvicorn. Duomenys saugomi PostgreSQL konteineryje; Pydantic modeliai faile `schemas.py` tikrina įvestis, o lentelių pakeitimus valdo Alembic migracijos. `docker-compose.yml` paleidžia tris atskirus konteinerius: `db`, `app` ir `mcp`. PostgreSQL duomenys išsaugomi Docker tome `postgres_data`.
+Planuoklis yra FastAPI programa, kurią aptarnauja Uvicorn. Programos logika ir Alembic migracijos sudėtos į `planner/`, svetainės failai — į `planner/static/`, pasirenkamas OpenAPI aprašas — į `api/`, o pagalbiniai scenarijai — į `scripts/`. Pydantic modeliai faile `planner/schemas.py` tikrina įvestis. Duomenys saugomi PostgreSQL konteineryje; `docker-compose.yml` paleidžia tris konteinerius: `db`, `app` ir `mcp`.
 
 ## Docker konteineriai
 
@@ -38,7 +38,7 @@ Svetainės Quick Tunnel ir OpenAI MCP tunelis yra atskiri. Juos galima paleisti 
 
 ## Pasirenkama: HTTP Actions API
 
-`openapi.yaml` yra atskiras, pasirenkamas GPT Actions API aprašas. Jis nėra reikalingas dabartiniam MCP ryšiui. Naudojant jį reikia viešai pasiekiamo HTTPS serverio, tikro serverio adreso OpenAPI faile ir serverio aplinkoje nustatyto `CHATGPT_API_KEY`. Rakto reikšmę laikykite serverio paslaptyse, ne faile ar Git saugykloje.
+`api/openapi.yaml` yra atskiras, pasirenkamas GPT Actions API aprašas. Jis nėra reikalingas dabartiniam MCP ryšiui. Naudojant jį reikia viešai pasiekiamo HTTPS serverio, tikro serverio adreso OpenAPI faile ir serverio aplinkoje nustatyto `CHATGPT_API_KEY`. Rakto reikšmę laikykite serverio paslaptyse, ne faile ar Git saugykloje.
 
 ## Duomenų atsarginė kopija
 
